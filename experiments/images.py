@@ -1,0 +1,134 @@
+"""All robustness cases use C000 + A001..A060, including parameter sweeps."""
+from itertools import product
+from .common import *
+
+ABLATIONS={'full':{},'fixed_dct44':{'policy':'dct44'},'fixed_checker':{'policy':'checker'},'sign_only':{'steps':[1],'offsets':[0]},'stronger_quantized_orbit':{'steps':[2,4,8],'offsets':[-2,0,2]}}
+SWEEPS={'B01':('psnr',[35,40,45,50,55,60,65,70]),'B02':('steps',[[1],[2],[2,4],[2,4,8],[2,4,8,16],[2,4,8,16,32],[2,4,8,16,32,64]]),'B03':('offsets',[list(range(-r,r+1)) for r in (0,1,2,4,8,16,32)]),'B04':('max_margin',[8,16,32,64,128,256,512,1024,2048]),'B05':('policy',['adaptive','dct44','checker'])}
+STRENGTHS={'Scalar-QIM':[2,4,8,12,16,24,32],'SCS':[2,4,8,12,16,24,32],'STDM-QIM':[2,4,6,8,10,12,16,24],'ISS':[.5,1,2,3,4,6,8],'SS':[.5,1,2,3,4,6,8]}
+
+def specs_for(group,profile,matched=None):
+    if group=='robustness60':
+        specs=[(m,'default',DEFAULT,None) for m in METHODS]
+        if matched:specs.extend((m,'matched',DEFAULT,matched) for m in METHODS if m!='FC-AOIP')
+        return specs
+    if group=='payload_robustness':return [('FC-AOIP',f'payload_{k}',DEFAULT,None) for k in ([64,4096] if profile=='smoke' else [64,256,512,1024,2048,4096])]
+    if group=='ablation':return [('FC-AOIP',k,{**DEFAULT,**v},None) for k,v in ABLATIONS.items()]
+    if group=='hyperparameters':
+        specs=[]
+        for name,(k,values) in SWEEPS.items():
+            if profile=='smoke':values=[values[0],values[-1]]
+            for i,v in enumerate(values):specs.append(('FC-AOIP',f'{name}_{i:02}',{**DEFAULT,k:v},None))
+        levels=list(product([45,55,65],[[2,4],[2,4,8,16],[2,4,8,16,32,64]],[1,4,16],[128,512,2048]))
+        if profile=='smoke':levels=levels[:1]
+        elif profile=='lite':levels=levels[::9]
+        for i,(p,s,r,m) in enumerate(levels):specs.append(('FC-AOIP',f'B06_{i:02}',{**DEFAULT,'psnr':p,'steps':s,'offsets':list(range(-r,r+1)),'max_margin':m},None))
+        return specs
+    if group=='calibration':
+        return [(m,f'strength_{v:g}',DEFAULT,{**FIXED_STRENGTHS,m:v}) for m,vs in STRENGTHS.items() for v in (vs if profile!='smoke' else vs[:2])]
+    if group=='validation':return [('FC-AOIP','default',DEFAULT,None)]+[(m,'matched',DEFAULT,matched) for m in METHODS if m!='FC-AOIP']
+    raise ValueError(group)
+
+def case_rows(x,b,method,params,strengths,base,sd,attack_seed_base):
+    q=dict(base,table='quality',status='ok',qualified=0,**params,strength=(strengths or FIXED_STRENGTHS).get(method))
+    rows=[q];y=pub=None
+    try:
+        t=time.perf_counter_ns();y,pub=embed_method(method,x,b,sd,params,strengths);q['first_call_ms']=elapsed(t)
+        t=time.perf_counter_ns();y,pub=embed_method(method,x,b,sd,params,strengths);q['embed_ms']=elapsed(t);q.update(quality(x,y,b,pub,method,params))
+        from skimage.metrics import structural_similarity
+        q['ssim']=float(structural_similarity(x,y,channel_axis=-1,data_range=255))
+        q['status']='ok' if q['qualified'] else 'unqualified'
+    except Exception as e:q.update(status=error_status(e),error=str(e)[:500])
+    for c in CONDITIONS[1:]:
+        a=dict(base,table='attacks',**c,qualified=q['qualified'],status='not_embedded',attack_seed=seed(*attack_seed_base,c['condition_id']))
+        if pub is not None and 'clean_ber' in q:
+            try:
+                t=time.perf_counter_ns();altered=attack_rgb(y,c,a['attack_seed']);a['attack_ms']=elapsed(t);t=time.perf_counter_ns();pred=apply_extract(method,altered,pub);a['extract_ms']=elapsed(t);a.update(accuracy(b,pred),status='ok')
+            except Exception as e:a.update(status='error',error=str(e)[:500])
+        rows.append(a)
+    return rows
+
+def run_images(group,split,profile,out,resume=False,limit=None,keys=None,matched=None,method_filter=None):
+    hosts=get_hosts(split,profile,limit);specs=specs_for(group,profile,matched)
+    if method_filter:specs=[s for s in specs if s[0] in method_filter]
+    if not specs:raise ValueError('No methods selected')
+    keys=keys or PROFILES[profile]['keys'];store=Store(out,dict(group=group,split=split,profile=profile,keys=keys,hosts={str(p.relative_to(ROOT)):sha(p) for p in hosts},specs=specs),resume)
+    try:
+        for path in hosts:
+            x=load_image(path);host=path.stem
+            for k in range(keys):
+                sd=seed('schedule',host,k);base_bits=bits_for(4096,'payload',host,k)
+                for method,variant,p,strength in specs:
+                    key=(host,k,method,variant)
+                    if store.has(key):continue
+                    b=base_bits[:int(variant.split('_')[1])] if group=='payload_robustness' else base_bits
+                    base=dict(experiment=group,split=split,host=host,key_index=k,seed=sd,method=method,variant=variant,payload_bits=len(b))
+                    rows=case_rows(x,b,method,p,strength,base,sd,('attacks',host,k));store.put(key,rows)
+                    print(group,host,k,method,variant,rows[0]['status'],flush=True)
+    finally:store.close()
+
+def calibration_selection(folder):
+    import pandas as pd
+    folder=Path(folder);m=json.loads((folder/'manifest.json').read_text())
+    if m['config']['split']!='train' or m['config']['group']!='calibration':raise ValueError('Only training calibration results allowed')
+    q=pd.read_csv(folder/'quality.csv');a=pd.read_csv(folder/'attacks.csv');records={};chosen={}
+    cfg=m['config'];expected=len(cfg['hosts'])*cfg['keys']*len(cfg['specs'])
+    if len(q)!=expected or len(a)!=expected*60 or {s[0] for s in cfg['specs']}!=set(STRENGTHS):raise RuntimeError('Incomplete training calibration')
+    if m['core']!=verify_core() or m['attack_protocol_sha256']!=protocol_sha256():raise RuntimeError('Calibration core/protocol mismatch')
+    for method in STRENGTHS:
+        qs=q[q.method==method]; candidates=[]
+        for variant,g in qs.groupby('variant'):
+            ar=a[(a.method==method)&(a.variant==variant)&(a.status=='ok')&(a.qualified==1)];ps=pd.to_numeric(g.psnr_db,errors='coerce');valid=g.qualified==1
+            # First maximize successful clean+quality fraction; then nearest actual PSNR to 55; then BER.
+            rec=dict(variant=variant,strength=float(g.strength.iloc[0]),qualification=float(valid.mean()),distance=float(abs(ps[valid]-55).mean()) if valid.any() else 1e9,ber=float(ar.ber.mean()) if len(ar) else 1.)
+            candidates.append(rec)
+        if not candidates:raise RuntimeError(f'Missing calibration {method}')
+        best=min(candidates,key=lambda r:(-r['qualification'],r['distance'],r['ber'],r['strength']));chosen[method]=best['strength'];records[method]=candidates
+    return chosen,records
+
+def freeze(out,calibration,validation):
+    from .datasets import verify_splits
+    chosen,details=calibration_selection(calibration);v=Path(validation);m=json.loads((v/'manifest.json').read_text());cfg=m['config'];
+    if cfg['group']!='validation' or cfg['split']!='validation':raise RuntimeError('Held-out validation required')
+    for sp,manifest in [('train',json.loads((Path(calibration)/'manifest.json').read_text())),('validation',m)]:
+        allowed={r['path']:r['sha256'] for r in json.loads((ROOT/'data/manifests'/f'{sp}.json').read_text())}
+        if any(allowed.get(p)!=h for p,h in manifest['config']['hosts'].items()):raise RuntimeError(f'{sp} manifest inputs do not match current split')
+    if any(s[3]!=chosen for s in cfg['specs'] if s[0]!='FC-AOIP'):raise RuntimeError('Validation strengths mismatch')
+    if {s[0] for s in cfg['specs']}!=set(METHODS):raise RuntimeError('Incomplete validation method set')
+    if not (v/'quality.csv').exists():raise RuntimeError('Validation incomplete')
+    import pandas as pd
+    q=pd.read_csv(v/'quality.csv');a=pd.read_csv(v/'attacks.csv');expected=len(cfg['hosts'])*cfg['keys']*len(cfg['specs'])
+    if len(q)!=expected or len(a)!=expected*60:raise RuntimeError('Incomplete validation cases')
+    obj=dict(proposal=DEFAULT,strengths=chosen,calibration_details=details,dataset_fingerprint=verify_splits(),core=verify_core(),attack_protocol=protocol_sha256(),calibration_manifest=sha(Path(calibration)/'manifest.json'),validation_manifest=sha(v/'manifest.json'))
+    atomic_json(out,dict(obj,fingerprint=digest(obj)));return chosen
+
+def read_frozen(path):
+    from .datasets import verify_splits
+    o=json.loads(Path(path).read_text());h=o.pop('fingerprint')
+    if digest(o)!=h or o['core']!=verify_core() or o['attack_protocol']!=protocol_sha256() or o['dataset_fingerprint']!=verify_splits() or o['proposal']!=DEFAULT:raise RuntimeError('Frozen config verification failed')
+    return o['strengths']
+
+def run_security(split,profile,out,resume,limit=None,keys=None):
+    hosts=get_hosts(split,profile,limit);keys=keys or (2 if profile=='smoke' else 100 if profile=='stress' else 25);store=Store(out,dict(group='security',split=split,hosts={str(p.relative_to(ROOT)):sha(p) for p in hosts},keys=keys),resume)
+    try:
+        for path in hosts:
+            x=load_image(path);host=path.stem;b=bits_for(4096,host,'security');sd=seed(host,'correct')
+            for method in METHODS:
+                key=(host,method)
+                if store.has(key):continue
+                rows=[];base=dict(host=host,method=method,split=split)
+                try:
+                    y,pub=embed_method(method,x,b,sd);q=quality(x,y,b,pub,method,DEFAULT)
+                    rows.append(dict(base,trial='correct',status='ok',qualified=q['qualified'],**accuracy(b,apply_extract(method,y,pub))))
+                    # Baseline DCT keys are not just seed dictionaries. Derive a new valid key from a separate embedding.
+                    for i in range(keys):
+                        wrong=seed(host,'wrong',i)
+                        try:
+                            if method=='FC-AOIP':wp={**pub,'seed':wrong}
+                            else:_,wp=embed_method(method,x,b,wrong)
+                            for kind,img,p in [('wrong_key',y,wp),('unmarked',x,pub)]:
+                                target=b if kind=='wrong_key' else bits_for(len(b),host,'unmarked',i)
+                                rows.append(dict(base,trial=kind,index=i,status='ok',qualified=q['qualified'],**accuracy(target,apply_extract(method,img,p))))
+                        except Exception as e:rows.append(dict(base,trial='wrong_key',index=i,status=error_status(e),error=str(e)))
+                except Exception as e:rows.append(dict(base,trial='correct',status=error_status(e),error=str(e)))
+                store.put(key,rows)
+    finally:store.close()

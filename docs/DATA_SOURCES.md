@@ -1,0 +1,9 @@
+# Data sources and usage
+
+- DIV2K, Agustsson and Timofte, NTIRE 2017: https://data.vision.ee.ethz.ch/cvl/DIV2K/ — official HR training and validation ZIPs. Check publisher terms before redistribution; this repository only downloads and uses data for research. Archive extraction selects deterministic numeric PNG IDs, validates ZIP member CRCs, and does not honor arbitrary archive paths. Full train archive is downloaded even in lite.
+- Kodak Lossless True Color Image Suite: https://www.r0k.us/graphics/kodak/ — PNGs `kodim01.png` through `kodim24.png` at https://www.r0k.us/graphics/kodak/kodak/. See source notice; do not assume a new redistribution license.
+- Blender Foundation: Big Buck Bunny and Sintel trailers, hosted by W3C under https://media.w3.org/2010/05/bunny/ and https://media.w3.org/2010/05/sintel/; film credits and CC BY attribution apply. Keep attribution with derivative outputs.
+- Xiph test media: https://media.xiph.org/video/derf/ — vidyo1, vidyo3, vidyo4, FourPeople public-domain sequences, downloaded as the listed lossy WebM versions. Stress profile downloads the listed crowd_run 2160p and ducks_take_off 1080p raw Y4M test sequences; check source-specific SVT terms. All video hashes and ffprobe metadata are recorded. Raw files are not shipped.
+- UVG: https://ultravideo.fi/dataset.html — optional user-provided authorized local source; not an automatic downloader target in this release.
+
+Network transfer is performed by curl with retries, resume, minimum byte count and local SHA-256 cache integrity. No publisher-pinned checksum is claimed unless an expected hash is provided; first successful download establishes the local checksum. PNG, ZIP and ffprobe validation detect invalid media. HTTP/network errors stop the data stage. This environment had DNS failures, so the publisher downloads themselves were not executed locally; the transfer/cache code was exercised with a local file URI in unit tests.
