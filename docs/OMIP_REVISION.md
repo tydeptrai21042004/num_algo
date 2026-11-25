@@ -1,0 +1,11 @@
+# Revision specification
+
+See the root README for the official protocol and execution instructions. The old documents describe earlier FC-AOIP versions and are historical only. The production embedding and extraction are single-carrier; controls are explicitly requested by experiment drivers. No lossy video coding, video attack evaluation, or video-frame image attacks are part of the official protocol. Only lossless FFV1 integrity and clean processing are measured. The original 12 hosts, two logo files, and five baseline adapters are preserved byte-for-byte. The attack registry is intentionally changed to 45 reference + 15 additional conditions. No result files from the previous method are reusable.
+
+## Local verification of this patch
+
+- Focused suite: 31 passed, including all 60 real-image attack outputs, deterministic replay, Gaussian variance, combined-attack composition, exact projection/margin, key-schedule regression, RGB lossless video round-trip on the bundled test fixture, and no video attack runner.
+- Default clean logo audit: 80/80 (8 test hosts × 2 logos × 5 keys), zero BER; minimum PSNR 55.000664 dB. This audit used the same production path before the final ablation-only sequential-allocation adjustment; the final ablation check below again returned all 80 default cases.
+- Attack preflight: 60/60 successful on Airplane/C, all 60 changed spatial pixels, deterministic execution and actual attacked-image exports. These are diagnostic checks, not full robustness averages.
+- Clean ablation audit of the final implementation: full 80/80; fixed margin 80/80; cyclic sequential allocation 62/80; green only 63/80; checkerboard control 70/80. Remaining cases report the distortion limit. No returned control image was pixel-identical to its paired full image. All five variants use a common key within each host/logo/key combination.
+- The full multi-hour experiment, actual downloads of the four Xiph videos, and full video resolution/streaming campaign have not been rerun locally. The focused checks use the bundled synthetic fixture strictly as a software test. No new publication-level robustness or throughput values are asserted. Run the complete pytest suite and official pipeline on Kaggle.

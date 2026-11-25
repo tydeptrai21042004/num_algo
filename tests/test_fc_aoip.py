@@ -46,7 +46,7 @@ def test_restricted_frontier_specific():
 def test_small_clean_exact_and_orbit(small_image):
     b=np.random.default_rng(3).integers(0,2,64,dtype=np.uint8)
     y,info=embed(small_image,b,seed=42,psnr_floor_db=25)
-    assert ber(b,extract(y,mode=info.mode,seed=42,length=64))==0
+    assert ber(b,extract(y,seed=42,length=64))==0
     assert check_restricted_orbit(y,b,info)
     assert psnr(small_image,y)>=25
     assert info.sse==int(np.sum((small_image.astype(np.int32)-y.astype(np.int32)).astype(np.int64)**2))
@@ -55,16 +55,16 @@ def test_full_4096_clean_psnr55(host):
     b=np.random.default_rng(33).integers(0,2,4096,dtype=np.uint8)
     y,info=embed(host,b,seed=2026)
     assert info.sse<=math.floor(host.size*255**2*10**(-55/10))
-    assert np.array_equal(extract(y,mode=info.mode,seed=2026,length=4096),b)
+    assert np.array_equal(extract(y,seed=2026,length=4096),b)
     assert check_restricted_orbit(y,b,info)
 
-def test_public_mode_required(host):
-    with pytest.raises(ValueError):extract(host,mode=3,length=4096)
+def test_public_mode_removed(host):
+    with pytest.raises(TypeError):extract(host,mode=3,length=4096)
 
 def test_infeasibility_not_silently_ignored():
     x=np.full((64,64,3),128,np.uint8)
     b=np.random.default_rng(2).integers(0,2,64,dtype=np.uint8)
-    with pytest.raises(ValueError,match='INFEASIBLE'):
+    with pytest.raises(ValueError,match='DISTORTION_LIMIT'):
         embed(x,b,seed=4,psnr_floor_db=95)
 
 def test_baseline_registry_exactly_five():
@@ -82,10 +82,6 @@ def test_baseline_output_shapes(host):
 
 def test_feature_sign_in_clean_image(host):
     b=np.random.default_rng(17).integers(0,2,4096,dtype=np.uint8)
-    for policy in ('dct44','checker'):
-        try:y,info=embed(host,b,seed=19,mode_policy=policy)
-        except ValueError as e:
-            assert 'INFEASIBLE' in str(e)
-            continue
-        f=features(y,mode=info.mode,seed=19,length=4096)
-        assert np.all((f>0)==(b>0))
+    y,info=embed(host,b,seed=19)
+    f=features(y,seed=19,length=4096)
+    assert np.all((f>0)==(b>0))

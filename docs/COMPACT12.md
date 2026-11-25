@@ -1,3 +1,5 @@
+HISTORICAL FC-AOIP DOCUMENT — superseded by README.md and docs/OMIP_REVISION.md for the current protocol.
+
 # Compact 12-host train/test protocol
 
 Run `bash run_12_images.sh --resume` or `bash run_all.sh --profile compact12 --resume` (the default profile of run_all.sh is now compact12). No image downloads. Both `--profile paper` and `--profile compact12` route to the same compact protocol. Only the explicitly selected legacy `--profile full-paper` (or legacy lite/stress) invokes the old external-data pipeline.

@@ -77,4 +77,4 @@ def analyze(root, out):
     return rows
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=Path('results/compact12_real_watermarks'));p.add_argument('--out',type=Path,default=Path('results/compact12_real_watermarks_summary/statistics'));a=p.parse_args();analyze(a.root,a.out)
+    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=Path('results/omip_final60_cleanvideo'));p.add_argument('--out',type=Path,default=Path('results/omip_final60_cleanvideo_summary/statistics'));a=p.parse_args();analyze(a.root,a.out)

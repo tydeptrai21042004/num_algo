@@ -12,11 +12,11 @@ from baselines.registry import METHODS as BASELINES, PAPERS, embed as baseline_e
 METHODS=('FC-AOIP',*BASELINES)
 FIXED_STRENGTHS={'Scalar-QIM':12.0,'STDM-QIM':10.0,'SCS':12.0,'ISS':3.0,'SS':3.0}
 
-def apply_embed(method,image,bits,*,seed=2026,psnr=55.,steps=(2,4),offsets=(-1,0,1),policy='adaptive',strengths=None):
+def apply_embed(method,image,bits,*,seed=2026,psnr=55.,steps=(2,4),offsets=(-1,0,1),strengths=None):
     if method=='FC-AOIP':
         y,info=proposal_embed(image,bits,seed=int(seed),psnr_floor_db=float(psnr),
-            orbit_steps=steps,orbit_offsets=offsets,mode_policy=policy)
-        return y,{'method':method,'mode':info.mode,'length':len(bits),'seed':seed,'info':info.as_dict()}
+            orbit_steps=steps,orbit_offsets=offsets)
+        return y,{'method':method,'length':len(bits),'seed':seed,'info':info.as_dict()}
     if method not in BASELINES:raise KeyError(f'Unknown method {method}')
     if len(bits)!=4096 or image.shape!=(512,512,3):
         raise ValueError('The supplied classical adapters require 512x512 RGB and 4096 bits')
@@ -27,7 +27,10 @@ def apply_embed(method,image,bits,*,seed=2026,psnr=55.,steps=(2,4),offsets=(-1,0
 
 def apply_extract(method,image,public):
     if method=='FC-AOIP':
-        return proposal_extract(image,mode=public['mode'],seed=public['seed'],length=public['length'])
+        if 'control' in public:
+            from .kernel import decode
+            return decode(image,public['length'],*public['control'],public['seed'])
+        return proposal_extract(image,seed=public['seed'],length=public['length'])
     return np.asarray(baseline_extract(method,image,public['key']),dtype=np.uint8).reshape(-1)
 
 def psnr(x,y):

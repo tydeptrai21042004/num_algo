@@ -21,7 +21,7 @@ def plot(root,out):
         ax.set(xlabel='Median PSNR (dB)',ylabel='Mean attacked BER');ax.legend(fontsize=7);save(fig,d,'psnr_ber')
         if 'hyperparameters' in str(path):
             q['family']=q.variant.str.split('_').str[0]
-            for family,col in [('B01','psnr'),('B02','steps'),('B03','offsets'),('B04','max_margin'),('B05','policy')]:
+            for family,col in [('B01','psnr'),('B02','steps'),('B03','offsets'),('B04','color'),('B05','carrier')]:
                 z=q[q.family==family];
                 if not len(z):continue
                 zz=z.groupby('variant').agg(value=(col,'first'),qualification=('qualified','mean'),latency=('embed_ms','median')).reset_index().merge(mean[['variant','attack_ber']],on='variant',how='left');fig,ax=plt.subplots(figsize=(8,4));ax.plot(range(len(zz)),zz.qualification,'o-',label='Qualification');ax.plot(range(len(zz)),zz.attack_ber,'s-',label='BER (qualified)');ax.set_xticks(range(len(zz)),zz.value.astype(str),rotation=35,ha='right',fontsize=7);ax.legend();ax.set_ylabel('Rate');save(fig,d,f'{family}_sensitivity')
@@ -35,13 +35,13 @@ def plot(root,out):
         z=df[(df.status=='ok')&(df.experiment=='C02')];g=z.groupby('payload_bits').embed_ms.median();fig,ax=plt.subplots(figsize=(6,4));ax.semilogx(g.index,g.values,'o-');ax.set(xlabel='Payload (bits)',ylabel='Median embedding latency (ms)');save(fig,d,'payload_scaling')
         z=df[(df.experiment=='C03')&df.embed_ms.notna()];groups=list(z.groupby('method'))
         if groups:
-            fig,ax=plt.subplots(figsize=(7,4));ax.boxplot([g.embed_ms for _,g in groups],tick_labels=[m for m,_ in groups],showfliers=False);ax.tick_params(axis='x',rotation=25);ax.set_ylabel('Embedding latency (ms)');save(fig,d,'latency_distribution')
+            fig,ax=plt.subplots(figsize=(7,4));ax.boxplot([g.embed_ms for _,g in groups],labels=[m for m,_ in groups],showfliers=False);ax.tick_params(axis='x',rotation=25);ax.set_ylabel('Embedding latency (ms)');save(fig,d,'latency_distribution')
     for path in root.rglob('video_codec_summary.csv'):
         df=pd.read_csv(path);d=out/path.parent.relative_to(root);
         if not {'width','generation','mean_qualified_ber'}<=set(df.columns):continue
         z=df[(df.status=='ok')&(df.width==512)&(df.generation==1)];
         if len(z) and 'mean_qualified_ber' in z:
-            g=z.pivot_table(index='codec',columns='method',values='mean_qualified_ber');fig,ax=plt.subplots(figsize=(11,4));g.plot.bar(ax=ax);ax.set_ylabel('Post-codec BER (qualified frames)');save(fig,d,'video_codec_ber')
+            g=z.pivot_table(index='codec',columns='method',values='mean_qualified_ber');fig,ax=plt.subplots(figsize=(11,4));g.plot.bar(ax=ax);ax.set_ylabel('Post-codec BER (qualified frames)');save(fig,d,'video_lossless_ber')
     for path in root.rglob('stream_summary.csv'):
         df=pd.read_csv(path);d=out/path.parent.relative_to(root);z=df[df.status=='ok'];fig,ax=plt.subplots(figsize=(7,4));
         if len(z) and 'successful_fps' in z:

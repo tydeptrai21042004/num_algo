@@ -11,8 +11,8 @@ def test_core_and_attack_protocol():
 
 def test_hyperparameter_grid_and_split_ids():
     specs=images.specs_for('hyperparameters','paper')
-    assert len([v for v in specs if v[1].startswith('B06')])==81
-    assert len(specs)==115
+    assert not any(v[1].startswith('B06') for v in specs)
+    assert len(specs)==26
     a,k=datasets.split_ids('paper');b,j=datasets.split_ids('lite')
     assert [len(a[x]) for x in ('train','validation','test')]==[100,50,100] and k==24
     assert all(set(a[x]).isdisjoint(a[y]) for x,y in [('train','validation'),('train','test'),('validation','test')])
@@ -20,7 +20,7 @@ def test_hyperparameter_grid_and_split_ids():
 
 def test_checkpoint_resume_and_reject_change(tmp_path):
     s=common.Store(tmp_path,{'id':1});s.put('a',[{'table':'x','status':'ok','a':1},{'table':'x','status':'error','error':'test'}]);s.close()
-    s=common.Store(tmp_path,{'id':1},True);assert s.has('a');s.close()
+    s=common.Store(tmp_path,{'id':1},True);assert not s.has('a');s.close()
     assert json.loads((tmp_path/'counts.json').read_text())['tables']['x']==2
     with pytest.raises(RuntimeError,match='fingerprint'):common.Store(tmp_path,{'id':2},True)
 
@@ -46,10 +46,10 @@ def test_split_leakage(tmp_path,monkeypatch):
     with pytest.raises(RuntimeError,match='Duplicate'):datasets.verify_splits()
 
 def test_infeasible_still_has_60_rows(monkeypatch):
-    def fail(*args,**kw):raise ValueError('INFEASIBLE synthetic test')
+    def fail(*args,**kw):raise ValueError('DISTORTION_LIMIT synthetic test')
     monkeypatch.setattr(images,'embed_method',fail)
     rows=images.case_rows(np.zeros((8,8,3),np.uint8),np.array([1]),'FC-AOIP',common.DEFAULT,None,{'host':'test'},1,('test',))
-    assert len(rows)==61 and rows[0]['status']=='infeasible'
+    assert len(rows)==61 and rows[0]['status']=='distortion_limit'
     assert all(r['status']=='not_embedded' for r in rows[1:])
 
 def test_independent_allocation_dp_heap():

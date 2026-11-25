@@ -16,7 +16,7 @@ cv2.setNumThreads(int(os.environ.get('FCAOIP_THREADS','1')))
 from fcaoip import proposal
 from fcaoip.evaluation import METHODS, FIXED_STRENGTHS, apply_embed, apply_extract, psnr, ber, nc01
 from src.attack_suite60 import canonical_conditions, attack_rgb, protocol_sha256
-DEFAULT=dict(psnr=55.,steps=[2,4],offsets=[-1,0,1],policy='adaptive',max_margin=512)
+DEFAULT=dict(psnr=55.,steps=[2,4],offsets=[-1,0,1],carrier=0,color=3,optimize=True,optimal=True)
 CONDITIONS=canonical_conditions()
 assert len(CONDITIONS)==61
 PROFILES={'smoke':dict(keys=1,hosts=1,reps=3,warm=1,rounds=1,frames=3), 'lite':dict(keys=1,hosts=6,reps=20,warm=3,rounds=2,frames=300), 'paper':dict(keys=5,hosts=None,reps=200,warm=20,rounds=5,frames=1000), 'stress':dict(keys=5,hosts=None,reps=200,warm=20,rounds=5,frames=10000)}
@@ -29,6 +29,7 @@ def sha(path):
 
 def digest(obj):return hashlib.sha256(json.dumps(obj,sort_keys=True,separators=(',',':'),default=str).encode()).hexdigest()
 def seed(*parts):return int(digest(parts)[:8],16)&0x7fffffff
+def proposal_seed(*parts):return int(digest(parts)[:32],16)
 def bits_for(n,*parts):return np.random.default_rng(seed(*parts)).integers(0,2,n,dtype=np.uint8)
 def clean_json(obj):
     if isinstance(obj,dict):return {k:clean_json(v) for k,v in obj.items()}
@@ -68,6 +69,7 @@ class Store:
         self.out=Path(out);self.out.mkdir(parents=True,exist_ok=True)
         if config.get('group') != 'mathematics':
             config={**config, 'watermarks':watermark_manifest()}
+        self.group=config.get('group')
         self.manifest=dict(config=config,core=verify_core(),attack_protocol_sha256=protocol_sha256(),runner=source_hash(),environment=environment())
         self.fingerprint=digest(self.manifest);p=self.out/'manifest.json'
         if p.exists():
@@ -75,7 +77,14 @@ class Store:
             if json.loads(p.read_text())['fingerprint']!=self.fingerprint:raise RuntimeError('Resume fingerprint mismatch; choose new output directory')
         else:atomic_json(p,dict(self.manifest,fingerprint=self.fingerprint))
         self.db=sqlite3.connect(self.out/'checkpoint.sqlite3');self.db.execute('CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, rows TEXT NOT NULL)');self.db.commit()
-    def has(self,key):return self.db.execute('SELECT 1 FROM cases WHERE id=?',(digest(key),)).fetchone() is not None
+    def has(self,key):
+        row=self.db.execute('SELECT rows FROM cases WHERE id=?',(digest(key),)).fetchone()
+        if not row:return False
+        rows=json.loads(row[0])
+        if not rows or any(r.get('status') in ('error','missing_frame','decode_error','extra_frames','mismatch') for r in rows):return False
+        if self.group in ('calibration','hyperparameters','robustness60','ablation','payload_robustness','validation'):
+            return len(rows)==61 and rows[0].get('table')=='quality' and {r.get('condition_id') for r in rows[1:]}=={c['condition_id'] for c in CONDITIONS[1:]}
+        return True
     def put(self,key,rows):
         with self.db:self.db.execute('INSERT OR REPLACE INTO cases VALUES (?,?)',(digest(key),json.dumps(clean_json(rows),allow_nan=False)))
     def export(self):
@@ -119,12 +128,27 @@ def get_hosts(split,profile='paper',limit=None):
 def embed_method(method,x,b,sd,params=None,strengths=None):
     p={**DEFAULT,**(params or {})}
     if method=='FC-AOIP':
-        y,i=proposal.embed(x,b,seed=sd,psnr_floor_db=p['psnr'],orbit_steps=tuple(p['steps']),orbit_offsets=tuple(p['offsets']),mode_policy=p['policy'],max_margin=p['max_margin'])
-        return y,dict(method=method,mode=i.mode,seed=sd,length=len(b),info=i.as_dict())
+        kw=dict(seed=sd,psnr_floor_db=p['psnr'],orbit_steps=tuple(p['steps']),orbit_offsets=tuple(p['offsets']))
+        control=(p['carrier'],p['color'])
+        if control==(0,3) and p['optimize'] and p['optimal']:y,i=proposal.embed(x,b,**kw)
+        else:y,i=proposal._project(x,b,**kw,kind=control[0],pred=control[1],optimize=p['optimize'],optimal=p['optimal'])
+        pub=dict(method=method,seed=sd,length=len(b),info=i.as_dict())
+        if control!=(0,3):pub['control']=control
+        return y,pub
     return apply_embed(method,x,b,seed=sd,psnr=p['psnr'],strengths=strengths)
 
+def image_ssim(x,y):
+    # Equivalent to skimage default uniform 7x7 SSIM, excluding the 3-pixel border.
+    if min(x.shape[:2])<7:raise ValueError('SSIM requires at least 7x7 pixels')
+    a=x.astype(np.float64);b=y.astype(np.float64)
+    def avg(v):return cv2.boxFilter(v,-1,(7,7),normalize=True,borderType=cv2.BORDER_REFLECT)
+    u=avg(a);v=avg(b);c=49/48;uu=u*u;vv=v*v;uv=u*v
+    va=c*(avg(a*a)-uu);vb=c*(avg(b*b)-vv);cov=c*(avg(a*b)-uv)
+    m=((2*uv+6.5025)*(2*cov+58.5225))/((uu+vv+6.5025)*(va+vb+58.5225))
+    return float(m[3:-3,3:-3].mean())
+
 def accuracy(b,p):
-    e=ber(b,p);return dict(ber=e,nc01=nc01(b,p),bipolar_nc=1-2*e,accuracy=1-e)
+    e=ber(b,p);b=np.asarray(b).ravel();p=np.asarray(p).ravel();rates=[float(np.mean(p[b==v]==v)) for v in (0,1) if np.any(b==v)];return dict(ber=e,nc01=nc01(b,p),bipolar_nc=1-2*e,accuracy=1-e,balanced_accuracy=float(np.mean(rates)) if len(rates)==2 else None)
 def elapsed(t):return (time.perf_counter_ns()-t)/1e6
 def peak_rss_mb():return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024
 
@@ -132,7 +156,7 @@ def quality(x,y,b,pub,method,p):
     t=time.perf_counter_ns();pred=apply_extract(method,y,pub);ex=elapsed(t);q=psnr(x,y);acc=accuracy(b,pred);d=y.astype(np.int32)-x.astype(np.int32);sse=int(np.square(d,dtype=np.int64).sum());del d
     result=dict(psnr_db=q,sse=sse,mse=sse/x.size,clean_ber=acc['ber'],clean_nc01=acc['nc01'],extract_ms=ex,qualified=int(q>=p['psnr']-1e-8 and acc['ber']==0))
     if method=='FC-AOIP':
-        info=pub['info'];v=proposal.features(y,mode=pub['mode'],seed=pub['seed'],length=len(b));m=int(np.min(np.where(b>0,v,-v)));budget=math.floor(x.size*255**2*10**(-p['psnr']/10));result.update(mode=pub['mode'],margin=info['margin'],actual_min_signed_feature=m,orbit_threshold=info['certified_min_margin'],orbit_certified=int(m>=info['certified_min_margin']),budget=budget,budget_remaining=budget-sse,cap_active=int(info['margin']==p['max_margin']))
+        info=pub['info'];v=proposal.kernel_features(y,len(b),*pub.get('control',(0,3)),pub['seed']);m=int(np.min(np.where(b>0,v,-v)));budget=math.floor(x.size*255**2*10**(-p['psnr']/10));result.update(margin=info['margin'],actual_min_signed_feature=m,orbit_threshold=info['certified_min_margin'],orbit_certified=int(m>=info['certified_min_margin']),budget=budget,budget_remaining=budget-sse)
     return result
 
-def error_status(e):return 'infeasible' if 'INFEASIBLE' in str(e) or 'max_margin below' in str(e) else 'error'
+def error_status(e):return 'distortion_limit' if 'DISTORTION_LIMIT' in str(e) else 'error'

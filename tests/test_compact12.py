@@ -23,7 +23,7 @@ def test_main_routes_calibrated_methods_no_image_download(monkeypatch,tmp_path):
     monkeypatch.setattr(runner.images,'run_images',run)
     monkeypatch.setattr(runner.images,'run_security',security)
     monkeypatch.setattr(runner.video,'run_video',videos)
-    monkeypatch.setattr(runner.video,'run_video_frames60',frames)
+    monkeypatch.setattr(runner.compute,'run_compute',Mock())
     monkeypatch.setattr(runner,'prepare_videos',prepare)
     monkeypatch.setattr(runner.mathematics,'run_math',Mock())
     monkeypatch.setattr(runner.datasets,'download_images',Mock(side_effect=AssertionError('image download forbidden')))
@@ -33,16 +33,20 @@ def test_main_routes_calibrated_methods_no_image_download(monkeypatch,tmp_path):
     from scripts import statistical_tests
     monkeypatch.setattr(statistical_tests,'analyze',Mock())
     monkeypatch.setattr(sys,'argv',['run_12_images.py','--out',str(tmp_path)])
+    from scripts import audit_attacks,audit_results,generate_visual_examples
+    monkeypatch.setattr(audit_attacks,'audit',Mock())
+    monkeypatch.setattr(audit_results,'audit',Mock())
+    monkeypatch.setattr(generate_visual_examples,'render',Mock())
     runner.main()
     assert [c.args[:2] for c in run.call_args_list]==[('calibration','train'),('hyperparameters','train'),('robustness60','test'),('ablation','test'),('payload_robustness','test')]
     for c in run.call_args_list:assert c.kwargs['hosts']==train_test[c.args[1]]
     assert run.call_args_list[2].kwargs['matched_only'] is True
     assert run.call_args_list[2].kwargs['matched']==strengths
-    assert videos.call_args.kwargs['method_filter']==frames.call_args.kwargs['methods']==runner.PROPOSAL_ONLY
+    assert videos.call_args.kwargs['method_filter']==runner.PROPOSAL_ONLY
     assert security.call_args.kwargs['method_filter']==runner.PROPOSAL_ONLY
     assert all(c.kwargs['method_filter']==runner.PROPOSAL_ONLY for c in run.call_args_list[3:])
     assert run.call_args_list[2].kwargs['method_filter'] is None
-    assert videos.call_args.kwargs['frames']==100 and frames.call_args.kwargs['frame_count']==10
+    assert videos.call_args.kwargs['frames']==100
     assert security.call_args.kwargs['hosts']==train_test['test']
     prepare.assert_called_once_with(False)
 
@@ -64,14 +68,9 @@ def test_security_and_frame_attacks_actual(tmp_path):
     r.images.run_security('test','paper',tmp_path/'security',False,keys=2,
         hosts=[ROOT/'data/host/Girl.bmp'],method_filter=r.PROPOSAL_ONLY)
     q=pd.read_csv(tmp_path/'security/raw_results.csv')
-    assert set(q.method)=={'FC-AOIP'} and len(q)==10 and set(q.status)=={'ok'}
+    assert set(q.method)=={'FC-AOIP'} and len(q)==18 and set(q.status)=={'ok'}
     assert set(q.watermark)=={'C','CC'} and q[q.trial=='correct'].ber.eq(0).all()
-    r.video.run_video_frames60('smoke',tmp_path/'frame',False,
-        explicit=str(ROOT/'data/video/synthetic_motion.mp4'),frame_count=1,methods=r.PROPOSAL_ONLY)
-    a=pd.read_csv(tmp_path/'frame/attacks.csv')
-    assert len(a)==60 and set(a.method)=={'FC-AOIP'}
-    assert set(a.condition_id)=={f'A{i:03}' for i in range(1,61)}
-    assert set(a.status)=={'ok'}
+    assert not hasattr(r.video,'run_video_frames60')
 
 
 def test_proposal_only_video_execution(tmp_path):
@@ -84,7 +83,7 @@ def test_proposal_only_video_execution(tmp_path):
         explicit=str(ROOT/'data/video/synthetic_motion.mp4'),frames=2,
         method_filter=r.PROPOSAL_ONLY, fps_list=[30])
     q=pd.read_csv(tmp_path/'video/video_codec_summary.csv')
-    assert set(q.method)=={'FC-AOIP'} and set(q.codec)=={'ffv1','h264_23'}
+    assert set(q.method)=={'FC-AOIP'} and set(q.codec)=={'ffv1'}
     assert set(q.status)=={'ok'}
     assert set(pd.read_csv(tmp_path/'video/stream_summary.csv').method)=={'FC-AOIP'}
 
@@ -123,7 +122,8 @@ def test_image_robustness_and_payload_actual(tmp_path):
     assert a.groupby(['method','watermark']).condition_id.nunique().eq(60).all()
     assert a.groupby(['method','watermark']).size().eq(60).all()
     assert set(a.watermark)=={'C','CC'}
-    assert a.seed.nunique()==1
+    assert a.groupby("method").seed.nunique().eq(1).all()
+    assert a.groupby("condition_id").attack_seed.nunique().eq(1).all()
     assert set(a[a.method=='FC-AOIP'].status)=={'ok'}
     r.images.run_images('payload_robustness','test','paper',tmp_path/'payload',keys=1,
         hosts=hosts,method_filter=r.PROPOSAL_ONLY)

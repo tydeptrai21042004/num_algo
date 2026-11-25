@@ -1,3 +1,5 @@
+HISTORICAL FC-AOIP DOCUMENT — superseded by README.md and docs/OMIP_REVISION.md for the current protocol.
+
 # Delivery verification
 
 - Original source baseline: `FC_AOIP_One_Proposal_5_Baselines_Ablation_Video_2026-11-23(1).zip`.

@@ -22,8 +22,8 @@ def run(args):
                 row=dict(host=host,key_index=key_i,watermark=watermark,seed=seed,status='ok',psnr_db='',mode='',margin='',sse='',clean_ber='',error='')
                 try:
                     y,meta=embed(x,bits,seed=seed,psnr_floor_db=args.psnr)
-                    row.update(psnr_db=meta.psnr_db,mode=meta.mode,margin=meta.margin,sse=meta.sse,
-                               clean_ber=ber(bits,extract(y,mode=meta.mode,seed=seed,length=args.bits)))
+                    row.update(psnr_db=meta.psnr_db,margin=meta.margin,sse=meta.sse,
+                               clean_ber=ber(bits,extract(y,seed=seed,length=args.bits)))
                 except ValueError as e:row.update(status='infeasible',error=str(e)[:200])
                 rows.append(row)
         print(host,'qualified',sum(r['status']=='ok' for r in rows if r['host']==host),'/',args.keys*len(WATERMARK_IDS),flush=True)

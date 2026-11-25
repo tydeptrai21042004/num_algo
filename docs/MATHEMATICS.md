@@ -1,3 +1,5 @@
+HISTORICAL FC-AOIP DOCUMENT — superseded by README.md and docs/OMIP_REVISION.md for the current protocol.
+
 # Mathematical contracts, exact results, and unsolved research gap
 
 ## 1. What is actually certified by the practical algorithm?

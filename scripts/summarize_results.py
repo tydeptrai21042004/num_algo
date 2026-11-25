@@ -20,7 +20,7 @@ def summarize(folder,out):
         if 'psnr_db' not in q:q['psnr_db']=np.nan
         label=str(path.parent.relative_to(folder));dest=out/label;dest.mkdir(parents=True,exist_ok=True)
         for (method,variant),g in q.groupby(['method','variant']):
-            raw=a[(a.method==method)&(a.variant==variant)];valid=raw[(raw.status=='ok')&(raw.qualified==1)];returned=raw[raw.status=='ok'];qual=g[g.qualified==1];ci=cluster_ci(valid,'ber');row=dict(method=method,variant=variant,attempts=len(g),qualified=len(qual),qualification_rate=len(qual)/len(g),attack_rows=len(raw),valid_attacks=len(valid),returned_attacks=len(returned),qualified_mean_ber=ci[0],ber_ci_low=ci[1],ber_ci_high=ci[2],n_hosts=ci[3],qualified_mean_nc01=float(valid.nc01.mean()) if len(valid) else None,all_returned_mean_ber=float(returned.ber.mean()) if len(returned) else None,median_psnr=float(pd.to_numeric(qual.psnr_db,errors='coerce').median()) if len(qual) else None,median_embed_ms=float(g.embed_ms.median()) if 'embed_ms' in g else None,worst_host_ber=float(valid.groupby('host').ber.mean().max()) if len(valid) else None,worst_condition_ber=float(valid.groupby('condition_id').ber.mean().max()) if len(valid) else None)
+            raw=a[(a.method==method)&(a.variant==variant)];valid=raw[(raw.status=='ok')&(raw.qualified==1)];returned=raw[raw.status=='ok'];qual=g[g.qualified==1];ci=cluster_ci(valid,'ber');row=dict(method=method,variant=variant,attempts=len(g),qualified=len(qual),qualification_rate=len(qual)/len(g),attack_rows=len(raw),valid_attacks=len(valid),returned_attacks=len(returned),qualified_mean_ber=ci[0],ber_ci_low=ci[1],ber_ci_high=ci[2],n_hosts=ci[3],qualified_mean_nc01=float(valid.nc01.mean()) if len(valid) else None,all_returned_mean_ber=float(returned.ber.mean()) if len(returned) else None,all_returned_mean_nc01=float(returned.nc01.mean()) if len(returned) else None,all_returned_balanced_accuracy=float(returned.balanced_accuracy.mean()) if len(returned) and 'balanced_accuracy' in returned else None,median_psnr=float(pd.to_numeric(qual.psnr_db,errors='coerce').median()) if len(qual) else None,median_embed_ms=float(g.embed_ms.median()) if 'embed_ms' in g else None,worst_host_ber=float(valid.groupby('host').ber.mean().max()) if len(valid) else None,worst_condition_ber=float(valid.groupby('condition_id').ber.mean().max()) if len(valid) else None)
             rows.append(row)
             for (cat,level),z in valid.groupby(['category','level']):fams.append(dict(method=method,variant=variant,category=cat,level=level,mean_ber=float(z.ber.mean()),mean_nc01=float(z.nc01.mean()),n=len(z)))
             if method=='FC-AOIP':continue
@@ -53,9 +53,9 @@ def summarize(folder,out):
         if 'trial' in df:
             if 'ber' not in df:df['ber']=np.nan
             rows=[]
-            for method,g in df.groupby('method'):
+            for (method,watermark),g in df.groupby(['method','watermark']):
                 for trial,z in g.groupby('trial'):
-                    valid=z[z.status=='ok'];r=dict(method=method,trial=trial,trials=len(z),valid=len(valid),mean_ber=float(valid.ber.mean()) if len(valid) else None)
+                    valid=z[z.status=='ok'];r=dict(method=method,watermark=watermark,trial=trial,trials=len(z),valid=len(valid),mean_ber=float(valid.ber.mean()) if len(valid) else None)
                     for threshold in (.05,.1,.2,.3,.4):r[f'accept_rate_ber_le_{threshold}']=float((valid.ber<=threshold).mean()) if len(valid) else None
                     rows.append(r)
             write_csv(dest/'detection_summary.csv',rows)

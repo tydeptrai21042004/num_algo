@@ -56,17 +56,16 @@ def prepare_videos(skip=False):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--stage',choices=['main','calibration','test','hyperparameters','ablation','payload_robustness','security','video','video_frames60','mathematics','compute','summary','statistics'],default='main')
+    p.add_argument('--stage',choices=['main','calibration','test','hyperparameters','ablation','payload_robustness','security','video','mathematics','compute','summary','statistics','attack_audit','audit'],default='main')
     p.add_argument('--keys',type=int,default=5)
     p.add_argument('--resume',action='store_true')
     p.add_argument('--skip-download',action='store_true',help='Use previously verified video cache; images are never downloaded')
     p.add_argument('--video-input',type=Path,help='Use one local real video instead of downloading test videos')
     p.add_argument('--video-profile',choices=['lite','paper'],default='paper')
     p.add_argument('--video-frames',type=int,default=100)
-    p.add_argument('--attack-frames',type=int,default=10)
-    p.add_argument('--out',type=Path,default=common.ROOT/'results/compact12_real_watermarks')
+    p.add_argument('--out',type=Path,default=common.ROOT/'results/omip_final60_cleanvideo')
     a=p.parse_args()
-    if min(a.keys,a.video_frames,a.attack_frames)<1:p.error('Counts must be positive')
+    if min(a.keys,a.video_frames)<1:p.error('Counts must be positive')
     if a.video_input and not a.video_input.is_file():p.error('Local video does not exist')
     common.verify_core();common.watermark_manifest();a.out.mkdir(parents=True,exist_ok=True)
     splits=prepare_split(a.out)
@@ -86,6 +85,9 @@ def main():
                  attack_protocol=common.protocol_sha256())
         common.atomic_json(a.out/'frozen_config.json',dict(obj,fingerprint=common.digest(obj)))
         return chosen
+    if a.stage in ('main','attack_audit'):
+        from scripts.audit_attacks import audit
+        audit(a.out/'attack_audit')
     if a.stage in ('main','mathematics'):
         mathematics.run_math('paper',a.out/'mathematics',a.resume)
     if a.stage in ('main','calibration'):
@@ -99,22 +101,25 @@ def main():
         if a.stage in ('main',group):run(group,'test',a.keys,method_filter=PROPOSAL_ONLY)
     if a.stage in ('main','security'):
         images.run_security('test','paper',a.out/'security',a.resume,hosts=splits['test'],method_filter=PROPOSAL_ONLY)
-    if a.stage in ('main','video','video_frames60'):
+    if a.stage in ('main','video'):
         if not a.video_input:prepare_videos(a.skip_download)
         explicit=str(a.video_input.resolve()) if a.video_input else None
         if a.stage in ('main','video'):
-            video.run_video(a.video_profile,a.out/'video',a.resume,split='test',explicit=explicit,frames=a.video_frames,method_filter=PROPOSAL_ONLY)
-        if a.stage in ('main','video_frames60'):
-            video.run_video_frames60(a.video_profile,a.out/'video_frames60',a.resume,split='test',explicit=explicit,frame_count=a.attack_frames,methods=PROPOSAL_ONLY)
-    if a.stage=='compute':compute.run_compute('paper',a.out/'compute',a.resume)
+            video.run_video(a.video_profile,a.out/'video',a.resume,split='test',explicit=explicit,frames=a.video_frames,method_filter=PROPOSAL_ONLY,keep=True)
+    if a.stage in ('main','compute'):compute.run_compute('paper',a.out/'compute',a.resume,strengths=calibrated(),hosts=splits['test'])
     if a.stage in ('main','summary'):
         from scripts.summarize_results import summarize
         from scripts.generate_figures import plot
         dest=a.out.parent/(a.out.name+'_summary')
         summarize(a.out,dest);plot(a.out,dest/'figures')
+        from scripts.generate_visual_examples import render
+        render(a.out,dest/'figures')
     if a.stage in ('main','summary','statistics'):
         from scripts.statistical_tests import analyze
         analyze(a.out, a.out.parent/(a.out.name+'_summary')/'statistics')
+    if a.stage in ('main','audit'):
+        from scripts.audit_results import audit
+        audit(a.out)
     print('Completed stage:',a.stage,flush=True)
 
 if __name__=='__main__':main()

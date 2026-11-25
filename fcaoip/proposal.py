@@ -1,25 +1,14 @@
-"""One proposal: Frontier-Certified Attack-Orbit Integer Projection (FC-AOIP).
-
-Practical path: 8x8 keyed nonoverlapping color-residual sign carriers with exact
-minimum-SSE G-pixel edits, two complementary carrier modes, and a quality-budget
-feasibility check. The public per-image mode is required for blind extraction.
-
-Certified attack orbit is RESTRICTED: integer feature z -> Q_q(z+o), where
-Q_q(w) = floor((w+floor(q/2))/q), and offsets o belong to a finite declared set.
-It is NOT a certified JPEG/H.264 attack model. Image/video attack results must
-be measured separately. No ECC, repetition, CRC, denoising, or attack classifier.
-"""
+"""OMIP: one fixed integer carrier, optimal feature margin, exact projection."""
 from __future__ import annotations
 from dataclasses import dataclass
 import math
 import numpy as np
-from .kernel import run_embed, decode
+from .kernel import run_embed, decode, features as kernel_features
 
-MODES = {0:(0,3), 1:(3,2)}  # DCT44(3G-R-B), checkerboard(2G-R-B)
+
 
 @dataclass(frozen=True)
 class EmbedInfo:
-    mode: int
     margin: int
     sse: int
     psnr_db: float
@@ -65,8 +54,8 @@ def _validate(image,bits,seed):
     capacity=(x.shape[0]//8)*(x.shape[1]//8)
     if not 1<=b.size<=capacity or np.any(b>1):
         raise ValueError(f'Payload must contain 1..{capacity} binary bits')
-    if not isinstance(seed,(int,np.integer)) or not 0<=seed<2**31:
-        raise ValueError('seed must be in [0, 2^31)')
+    if not isinstance(seed,(int,np.integer)) or not 0<=seed<2**128:
+        raise ValueError('seed must be in [0, 2^128)')
     return x,b
 
 
@@ -76,63 +65,32 @@ def psnr(x,y):
     return float('inf') if sse==0 else 10*math.log10(255**2*x.size/sse)
 
 
-def embed(image,bits,*,seed=2026,psnr_floor_db=55.0,
-          orbit_steps=(2,4),orbit_offsets=(-1,0,1),
-          mode_policy='adaptive',max_margin=512):
+def _project(image,bits,*,seed=2026,psnr_floor_db=55.,orbit_steps=(2,4),orbit_offsets=(-1,0,1),kind=0,pred=3,optimize=True,optimal=True):
     x,b=_validate(image,bits,seed)
-    min_margin=minimum_orbit_margin(orbit_steps,orbit_offsets)
-    if min_margin>max_margin: raise ValueError('max_margin below orbit certificate')
+    if not math.isfinite(psnr_floor_db) or psnr_floor_db<0:raise ValueError('Invalid PSNR floor')
+    minimum=minimum_orbit_margin(orbit_steps,orbit_offsets)
     budget=math.floor(x.size*255**2 * 10**(-float(psnr_floor_db)/10))
-    if budget<0:raise ValueError('Invalid PSNR floor')
-    choices={'adaptive':(0,1),'dct44':(0,),'checker':(1,)}
-    if mode_policy not in choices:raise ValueError('Unsupported mode_policy')
-    for mode in choices[mode_policy]:
-        kind,pred=MODES[mode]
-        y,margin,claimed=run_embed(x,b,kind,pred,int(seed),int(max_margin),int(budget),int(min_margin))
-        if margin<0:continue
-        sse=int(np.square(y.astype(np.int32)-x.astype(np.int32),dtype=np.int64).sum())
-        if sse!=claimed or sse>budget: raise AssertionError('SSE discrepancy or PSNR floor breached')
-        recovered=extract(y,mode=mode,seed=seed,length=b.size)
-        if not np.array_equal(b,recovered): raise AssertionError('Nonzero clean BER')
-        # Strict mathematical checks of the idealized integer feature orbit.
-        vals=features(y,mode=mode,seed=seed,length=b.size)
-        signed=np.where(b>0,vals,-vals)
-        if np.any(signed<min_margin):raise AssertionError('Orbit margin violation')
-        return y,EmbedInfo(mode,int(margin),sse,psnr(x,y),b.size,x.shape[0],x.shape[1],
-                           int(seed),tuple(map(int,orbit_steps)),tuple(map(int,orbit_offsets)),
-                           min_margin,float(psnr_floor_db))
-    raise ValueError(f'INFEASIBLE: no permitted mode fits PSNR {psnr_floor_db:.2f} dB and quantized-orbit margin {min_margin}')
+    y,margin,claimed=run_embed(x,b,kind,pred,int(seed),budget,minimum,optimize,optimal)
+    if margin<0:raise ValueError('DISTORTION_LIMIT: requested margin exceeds distortion budget')
+    sse=int(np.square(y.astype(np.int32)-x.astype(np.int32),dtype=np.int64).sum())
+    if sse!=claimed or sse>budget:raise AssertionError('SSE discrepancy')
+    v=kernel_features(y,len(b),kind,pred,int(seed))
+    if not np.array_equal((v>0).astype(np.uint8),b) or np.min(np.where(b>0,v,-v))<margin:raise AssertionError('Signed margin violation')
+    return y,EmbedInfo(int(margin),sse,psnr(x,y),b.size,x.shape[0],x.shape[1],int(seed),tuple(map(int,orbit_steps)),tuple(map(int,orbit_offsets)),minimum,float(psnr_floor_db))
 
+def embed(image,bits,*,seed=2026,psnr_floor_db=55.,orbit_steps=(2,4),orbit_offsets=(-1,0,1)):
+    return _project(image,bits,seed=seed,psnr_floor_db=psnr_floor_db,orbit_steps=orbit_steps,orbit_offsets=orbit_offsets)
 
-def extract(image,*,mode,seed=2026,length=4096):
-    x=np.asarray(image)
-    if x.ndim!=3 or x.shape[2]!=3 or x.dtype!=np.uint8 or x.shape[0]%8 or x.shape[1]%8:
-        raise ValueError('Expected RGB uint8 dimensions divisible by 8')
-    if mode not in MODES:raise ValueError('Public 1-bit mode descriptor required')
-    if not 1<=length<=(x.shape[0]//8)*(x.shape[1]//8):raise ValueError('Invalid payload length')
-    kind,pred=MODES[mode]
-    return decode(x,int(length),kind,pred,int(seed))
+def features(image,*,seed=2026,length=4096):
+    x,_=_validate(image,np.zeros(length,np.uint8),seed)
+    return kernel_features(x,length,0,3,int(seed))
 
-
-def features(image,*,mode,seed=2026,length=4096):
-    """Vectorized exact integer signed color-residual features in keyed block order."""
-    x=np.asarray(image)
-    h,w=x.shape[:2]; nr=h//8;nc=w//8;K=nr*nc
-    a=2*(int(seed)%65536)+1
-    while math.gcd(a,K)!=1:a+=2
-    b=(int(seed)*23+59)%K
-    blocks=x.reshape(nr,8,nc,8,3).transpose(0,2,1,3,4).reshape(K,8,8,3).astype(np.int32)
-    rr=np.asarray([1,-1,-1,1,1,-1,-1,1],dtype=np.int32)
-    weights=np.outer(rr,rr) if mode==0 else np.fromfunction(lambda y,z:1-2*((y+z)%2),(8,8),dtype=int)
-    coef=(3 if mode==0 else 2)*blocks[:,:,:,1]-blocks[:,:,:,0]-blocks[:,:,:,2]
-    all_features=np.sum(coef*weights,axis=(1,2),dtype=np.int32)
-    index=(np.arange(length,dtype=np.int64)*int(a)+b)%K
-    return all_features[index]
-
+def extract(image,*,seed=2026,length=4096):
+    return (features(image,seed=seed,length=length)>0).astype(np.uint8)
 
 def check_restricted_orbit(marked,bits,info):
     """Certify only exact integer signed-feature quantizer family, not JPEG/video."""
-    vals=features(marked,mode=info.mode,seed=info.seed,length=info.payload_bits)
+    vals=features(marked,seed=info.seed,length=info.payload_bits)
     b=np.asarray(bits,dtype=np.uint8).ravel()
     if b.size!=len(vals):raise ValueError('payload length mismatch')
     for q in info.orbit_steps:

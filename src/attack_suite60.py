@@ -1,93 +1,80 @@
-"""Balanced fixed 60-attack protocol: 5 families x 4 attacks x 3 levels.
-
-All methods receive identical conditions and deterministic stochastic attack draws.
-The clean condition C000 is separate and is NOT one of the 60 attacks.
-
-This module keeps the original file ``cirmm_attacks.py`` intact for provenance.
-It reuses its published-method-agnostic attack implementations, except AWGN,
-which is now explicitly parameterized as pixel standard deviation sigma.
-
-Geometric attacks are evaluated without oracle re-registration in the primary
-experiment, and therefore measure alignment failure AND payload fragility.
-CIRMM translation-pilot registration is reported in a separate table.
+"""Canonical manuscript-derived protocol: 45 reference conditions + 15 additions.
+All geometry returns the original canvas; no registration. Combined operations
+execute in order with fixed canvas normalization after each operation.
 """
-from __future__ import annotations
-
-import hashlib
-import json
+import hashlib,json
 from pathlib import Path
-
+from io import BytesIO
 import cv2
 import numpy as np
-from cirmm_attacks import ATTACKS, attack as legacy_attack
+from PIL import Image,ImageFilter,ImageEnhance
+VERSION='omip-manuscript45-plus15-v1'
+FAMILIES=('Compression','Noise','Filtering','Geometry','Photometric','Combined')
+LEVELS=('1','2','3','4','5','Single')
 
-VERSION = 'CIRMM_BALANCED_5x4x3_v2_pixel_AWGN'
-LEVELS = ('Mild', 'Moderate', 'Strong')
-FAMILIES = ('Compression', 'Noise', 'Filtering', 'Geometry', 'Photometric')
-ATTACKS_60 = {
-    family: {
-        (('AWGN pixel sigma' if name == 'Gaussian variance [0,1]' else name)):
-            ((2.0, 5.0, 10.0) if name == 'Gaussian variance [0,1]' else tuple(values))
-        for name, values in methods.items()
-    }
-    for family, methods in ATTACKS.items()
-}
-assert tuple(ATTACKS_60) == FAMILIES
-assert all(len(subtypes) == 4 for subtypes in ATTACKS_60.values())
-assert all(len(levels) == 3 for subtypes in ATTACKS_60.values() for levels in subtypes.values())
-
-
-def canonical_conditions() -> list[dict]:
-    rows = [dict(condition_id='C000', category='Clean', attack='none',
-                 level='Clean', severity_rank=0, parameter='', attack_index=0)]
-    idx = 0
-    for family, methods in ATTACKS_60.items():
-        for name, values in methods.items():
-            for rank, (level, param) in enumerate(zip(LEVELS, values), 1):
-                idx += 1
-                rows.append(dict(condition_id=f'A{idx:03d}', category=family,
-                                 attack=name, level=level, severity_rank=rank,
-                                 parameter=repr(param), attack_index=idx))
-    assert idx == 60
-    assert len({c['condition_id'] for c in rows}) == 61
-    for family in FAMILIES:
-        assert sum(c['category'] == family for c in rows) == 12
-    for level in LEVELS:
-        assert sum(c['level'] == level for c in rows) == 20
+def canonical_conditions():
+    rows=[dict(condition_id='C000',category='Clean',attack='none',level='Clean',severity_rank=0,parameter='',attack_index=0,operations=[])]
+    def add(cat,name,values,ref=True):
+        for i,v in enumerate(values,1):
+            idx=len(rows);rows.append(dict(condition_id=f'A{idx:03d}',category=cat,attack=name,level=str(i),severity_rank=i,parameter=repr(v),attack_index=idx,operations=[[name,v]],reference=ref if isinstance(ref,bool) else v in ref))
+    add('Compression','JPEG',[90,70,50,40,30]);add('Compression','JPEG2000',[3,5,10,7],(3,5,10));add('Compression','WebP',[90,70,50],False);add('Compression','Bit depth',[7,6,5],False)
+    add('Noise','Gaussian variance',[.003,.005,.05]);add('Noise','Salt and pepper',[.01,.05]);add('Noise','Speckle variance',[.001,.005,.03]);add('Noise','Poisson peak',[255,128,64],False)
+    add('Filtering','Median',[3,5]);add('Filtering','Average',[3,5]);add('Filtering','Lowpass',[5]);add('Filtering','Gaussian blur',[.5,1.,1.5],(1.,));add('Filtering','Sharpness',[1.5])
+    add('Geometry','Rotation',[5,10,15,30,45]);add('Geometry','Translation',[(5,5),(10,0)]);add('Geometry','Resize',[.5]);add('Geometry','Occlusion',[.25]);add('Geometry','Border crop pad',[16]);add('Geometry','Upscale',[2.]);add('Geometry','Crop resize',[.5]);add('Geometry','Shear',[.1])
+    add('Photometric','Brightness',[.9]);add('Photometric','Contrast',[.9]);add('Photometric','Histogram equalization',[True]);add('Photometric','Gamma',[1.2,1.5],False);add('Photometric','Saturation',[.5],False)
+    combos=[[['JPEG2000',7],['Resize',.5]],[['JPEG2000',7],['Rotation',10]],[['Resize',.5],['Gaussian blur',.5]],[['Sharpness',.5],['JPEG',90]],[['Speckle variance',.001],['Resize',.5]],[['Sharpness',.5],['Speckle variance',.001],['JPEG2000',7]]]
+    for i,ops in enumerate(combos,1):
+        idx=len(rows);rows.append(dict(condition_id=f'A{idx:03d}',category='Combined',attack=' + '.join(x[0] for x in ops),level='Single',severity_rank=1,parameter=repr(ops),attack_index=idx,operations=ops,reference=True))
+    assert len(rows)==61 and sum(r.get('reference',False) for r in rows)==45
     return rows
 
+def protocol_sha256():
+    return hashlib.sha256(json.dumps({'version':VERSION,'conditions':canonical_conditions(),'source':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},sort_keys=True).encode()).hexdigest()
 
-def protocol_sha256() -> str:
-    implementation = {
-        name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-        for name in ('attack_suite60.py', 'cirmm_attacks.py')
-    }
-    body = {'version': VERSION, 'conditions': canonical_conditions(), 'source_sha256': implementation}
-    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+def clip(x):return np.clip(np.rint(x),0,255).astype(np.uint8)
+def operation(x,name,v,rng):
+    h,w=x.shape[:2];im=Image.fromarray(x)
+    if name in ('JPEG','JPEG2000','WebP'):
+        buf=BytesIO();fmt={'JPEG':'JPEG','JPEG2000':'JPEG2000','WebP':'WEBP'}[name]
+        kw={'quality_mode':'rates','quality_layers':[int(v)],'irreversible':True} if name=='JPEG2000' else {'quality':int(v)} if name=='JPEG' else {'quality':int(v),'lossless':False,'method':6}
+        im.save(buf,format=fmt,**kw);buf.seek(0)
+        with Image.open(buf) as dec:return np.asarray(dec.convert('RGB')).copy()
+    if name=='Bit depth':return ((x>>(8-v))<<(8-v)).astype(np.uint8)
+    if name=='Gaussian variance':return clip(x.astype(float)+rng.normal(0,255*np.sqrt(v),x.shape))
+    if name=='Speckle variance':return clip(x.astype(float)*(1+rng.normal(0,np.sqrt(v),x.shape)))
+    if name=='Salt and pepper':
+        y=x.copy();m=rng.random((h,w));y[m<v/2]=0;y[(m>=v/2)&(m<v)]=255;return y
+    if name=='Poisson peak':return clip(rng.poisson(x.astype(float)*v/255)*255/v)
+    if name=='Median':return cv2.medianBlur(x,v)
+    if name=='Average':return cv2.blur(x,(v,v))
+    if name=='Lowpass':return cv2.GaussianBlur(x,(v,v),0) # documented binomial Gaussian low-pass
+    if name=='Gaussian blur':return np.asarray(im.filter(ImageFilter.GaussianBlur(v))).copy()
+    if name=='Sharpness':return np.asarray(ImageEnhance.Sharpness(im).enhance(v)).copy()
+    if name=='Rotation':return cv2.warpAffine(x,cv2.getRotationMatrix2D(((w-1)/2,(h-1)/2),v,1),(w,h),borderMode=cv2.BORDER_CONSTANT)
+    if name=='Translation':return cv2.warpAffine(x,np.float32([[1,0,v[0]],[0,1,v[1]]]),(w,h),borderMode=cv2.BORDER_CONSTANT)
+    if name in ('Resize','Upscale'):
+        small=cv2.resize(x,(max(1,round(w*v)),max(1,round(h*v))),interpolation=cv2.INTER_AREA if v<1 else cv2.INTER_CUBIC)
+        return cv2.resize(small,(w,h),interpolation=cv2.INTER_CUBIC if v<1 else cv2.INTER_AREA)
+    if name=='Occlusion':
+        hh,ww=round(h*np.sqrt(v)),round(w*np.sqrt(v));y=x.copy();y[(h-hh)//2:(h-hh)//2+hh,(w-ww)//2:(w-ww)//2+ww]=0;return y
+    if name=='Border crop pad':
+        if min(h,w)<=2*v:raise ValueError('Image too small for border crop')
+        return cv2.copyMakeBorder(x[v:h-v,v:w-v],v,v,v,v,cv2.BORDER_CONSTANT)
+    if name=='Crop resize':
+        hh,ww=max(1,round(h*np.sqrt(v))),max(1,round(w*np.sqrt(v)));return cv2.resize(x[(h-hh)//2:(h-hh)//2+hh,(w-ww)//2:(w-ww)//2+ww],(w,h),interpolation=cv2.INTER_CUBIC)
+    if name=='Shear':return cv2.warpAffine(x,np.float32([[1,v,-v*(h-1)/2],[0,1,0]]),(w,h),borderMode=cv2.BORDER_CONSTANT)
+    if name=='Brightness':return np.asarray(ImageEnhance.Brightness(im).enhance(v)).copy()
+    if name=='Contrast':return np.asarray(ImageEnhance.Contrast(im).enhance(v)).copy()
+    if name=='Histogram equalization':
+        y=cv2.cvtColor(x,cv2.COLOR_RGB2YCrCb);y[:,:,0]=cv2.equalizeHist(y[:,:,0]);return cv2.cvtColor(y,cv2.COLOR_YCrCb2RGB)
+    if name=='Gamma':return clip(255*(x.astype(float)/255)**v)
+    if name=='Saturation':return np.asarray(ImageEnhance.Color(im).enhance(v)).copy()
+    raise ValueError(name)
 
-
-def attack_rgb(rgb: np.ndarray, cond: dict, seed: int) -> np.ndarray:
-    """Return fixed-size uint8 RGB; stochastic masks/noise are shared via seed.
-
-    Do not change image geometry dimensions; original attack semantics are used:
-    cropped regions are resized back, and rotations preserve the 512x512 canvas.
-    """
-    a = np.asarray(rgb)
-    if a.ndim != 3 or a.shape[2] != 3 or a.dtype != np.uint8:
-        raise ValueError('Input must be uint8 RGB with three channels')
-    name = cond['attack']
-    if name == 'none':
-        result = a.copy()
-    elif name == 'AWGN pixel sigma':
-        sigma = float(ATTACKS_60['Noise'][name][LEVELS.index(cond['level'])])
-        noise = np.random.default_rng(int(seed)).normal(0.0, sigma, size=a.shape)
-        result = np.clip(np.rint(a.astype(np.float64) + noise), 0, 255).astype(np.uint8)
-    else:
-        bgr = cv2.cvtColor(a, cv2.COLOR_RGB2BGR)
-        observed = legacy_attack(bgr, name, cond['level'], seed=int(seed))
-        if observed.shape != bgr.shape or observed.dtype != np.uint8:
-            raise AssertionError(f'{name}: attack returned bad shape or type')
-        result = cv2.cvtColor(observed, cv2.COLOR_BGR2RGB)
-    if result.shape != a.shape or result.dtype != np.uint8:
-        raise AssertionError(f'{name}: RGB contract violated')
-    return result
+def attack_rgb(rgb,cond,seed):
+    x=np.asarray(rgb)
+    if x.ndim!=3 or x.shape[2]!=3 or x.dtype!=np.uint8:raise ValueError('Expected RGB uint8')
+    y=x.copy();rng=np.random.default_rng(int(seed))
+    for name,v in cond['operations']:y=operation(y,name,v,rng)
+    if y.shape!=x.shape or y.dtype!=np.uint8:raise AssertionError('Attack output contract')
+    return y

@@ -26,8 +26,8 @@ def test_original_logo_pixels_and_alpha():
 def test_frame_payload_independent_of_key_and_source():
     assert np.array_equal(video.frame_bits(4096,'source1',0),watermark_bits('C'))
     assert np.array_equal(video.frame_bits(4096,'source2',2),watermark_bits('C'))
-    assert np.array_equal(video.frame_bits(4096,'source1',1),watermark_bits('CC'))
-    assert video.frame_seed('source1',0)!=video.frame_seed('source1',2)
+    assert np.array_equal(video.frame_bits(4096,'source1',1),watermark_bits('C'))
+    assert video.frame_seed('source1',0)==video.frame_seed('source1',2)
 
 
 def test_actual_logo_clean_recovery():

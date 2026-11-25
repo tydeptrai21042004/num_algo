@@ -72,7 +72,7 @@ def run(args):
                                             'ber':ber(bits,pred),'nc01':nc01(bits,pred),
                                             'clean_qualified':record['psnr55_clean0']})
                     except Exception as e:
-                        record.update(status='infeasible' if 'INFEASIBLE' in str(e) else 'error',error=str(e)[:500])
+                        record.update(status='distortion_limit' if 'DISTORTION_LIMIT' in str(e) else 'error',error=str(e)[:500])
                     quality.append(record)
                     print(f'{host_name} key{sidx} {method}: {record["status"]} PSNR={record["psnr_db"]} BER={record["clean_ber"]} ms={record["embed_ms"]}',flush=True)
                     write_csv(out/'quality_timing.csv',quality)

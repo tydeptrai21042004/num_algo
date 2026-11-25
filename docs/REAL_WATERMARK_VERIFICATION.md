@@ -1,3 +1,5 @@
+HISTORICAL FC-AOIP DOCUMENT — superseded by README.md and docs/OMIP_REVISION.md for the current protocol.
+
 # Original C/CC payload update — local verification
 
 Source: num_algo-main(2).zip. Changes are limited to experimental drivers, reporting, tests and documentation. The two original PNG files and frozen algorithm/baseline/attack sources are unchanged.

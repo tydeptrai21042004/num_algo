@@ -1,3 +1,5 @@
+HISTORICAL FC-AOIP DOCUMENT — superseded by README.md and docs/OMIP_REVISION.md for the current protocol.
+
 # Experimental protocol
 
 See the top-level README for execution, configuration, split and reporting details. The primary runner is `scripts/run_experiments.py` and `run_all.sh`. The original single-run scripts remain for compatibility, but their image robustness modes now use all A001–A060 conditions (or no attacks for explicit diagnostic-only ablation). Use the checkpointed runner for publication experiments.

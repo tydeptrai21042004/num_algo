@@ -2,7 +2,7 @@
 from .common import *
 from fcaoip.kernel import cost,run_embed,forward,allcost,sgn
 from fcaoip.frontier_exact_reference import optimal_staircase,brute_optimizer
-from fcaoip.proposal import minimum_orbit_margin,quant_index,MODES
+from fcaoip.proposal import minimum_orbit_margin,quant_index
 import heapq
 
 def dp_cost(caps,n):
@@ -59,23 +59,23 @@ def run_math(profile,out,resume):
                     store.put(key,[row])
         for i in range(n):
             x=synthetic('random',16,16,i);b=bits_for(4,i);budget=[100,500,5000,50000][i%4];cap=64 if profile=='smoke' else 512
-            for mode,(kind,alpha) in MODES.items():
+            for mode,(kind,alpha) in [(0,(0,3))]:
                 key=('A05',i,mode)
                 if store.has(key):continue
-                H,ones,caps,a,z,coef=forward(x,b,kind,alpha,42);costs=[];prefixes=[];j=z
-                for k in range(len(b)):
+                from fcaoip.kernel import schedule
+                order=schedule(16,16,42);H,ones,caps,coef=forward(x,b,kind,alpha,order);prefixes=[];costs=[]
+                for k,j in enumerate(order[:len(b)]):
                     rr,cc=(j//2)*8,(j%2)*8;local=caps_for(x[rr:rr+8,cc:cc+8],kind,2*int(b[k])-1)
-                    increments=sorted(2*t+1 for c in local for t in range(c));prefixes.append(np.concatenate(([0],np.cumsum(increments))));j=(j+a)%4
-                # Independent heap reference per block, explicit scan over every candidate margin.
-                for mu in range(4,cap+1):
-                    total=0;j=z
+                    increments=sorted(2*t+1 for c in local for t in range(c));prefixes.append(np.concatenate(([0],np.cumsum(increments))))
+                # Exhaustive integer margin scan up to natural upper bound, early stop by monotonicity.
+                for mu in range(4,int(np.min(H+coef*caps))+1):
+                    total=0
                     for k in range(len(b)):
-                        rr,cc=(j//2)*8,(j%2)*8;need=max(0,(mu*coef-int(H[k])+coef-1)//coef);c=int(prefixes[k][need]) if need<len(prefixes[k]) else -1
+                        need=max(0,(mu-int(H[k])+coef-1)//coef);c=int(prefixes[k][need]) if need<len(prefixes[k]) else -1
                         if c<0:total=budget+1;break
                         total+=c
                         if total>budget:break
-                        j=(j+a)%4
                     if total>budget:break
                     costs.append((mu,total))
-                y,margin,sse=run_embed(x,b,kind,alpha,42,cap,budget,4);ref=costs[-1] if costs else (-1,-1);store.put(key,[dict(experiment='A05',case=i,mode=mode,budget=budget,margin=margin,sse=sse,reference_margin=ref[0],reference_sse=ref[1],status='ok' if (margin,sse)==ref else 'mismatch')])
+                y,margin,sse=run_embed(x,b,kind,alpha,42,budget,4);ref=costs[-1] if costs else (-1,-1);store.put(key,[dict(experiment='A05',case=i,budget=budget,margin=margin,sse=sse,reference_margin=ref[0],reference_sse=ref[1],status='ok' if (margin,sse)==ref else 'mismatch')])
     finally:store.close()
