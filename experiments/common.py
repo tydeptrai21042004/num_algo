@@ -11,6 +11,7 @@ sys.path[:0]=[str(ROOT),str(ROOT/'src')]
 import numpy as np
 import cv2
 from PIL import Image
+from .watermarks import WATERMARK_IDS, watermark_bits, watermark_for_index, watermark_manifest
 cv2.setNumThreads(int(os.environ.get('FCAOIP_THREADS','1')))
 from fcaoip import proposal
 from fcaoip.evaluation import METHODS, FIXED_STRENGTHS, apply_embed, apply_extract, psnr, ber, nc01
@@ -65,6 +66,8 @@ class Store:
     """Atomic case commits. A completed case contains all expected rows, including failures."""
     def __init__(self,out,config,resume=False):
         self.out=Path(out);self.out.mkdir(parents=True,exist_ok=True)
+        if config.get('group') != 'mathematics':
+            config={**config, 'watermarks':watermark_manifest()}
         self.manifest=dict(config=config,core=verify_core(),attack_protocol_sha256=protocol_sha256(),runner=source_hash(),environment=environment())
         self.fingerprint=digest(self.manifest);p=self.out/'manifest.json'
         if p.exists():

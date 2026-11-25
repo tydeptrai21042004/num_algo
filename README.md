@@ -1,6 +1,10 @@
 # FC-AOIP — frozen proposal, expanded experimental suite
 
-One original FC-AOIP implementation, five classical paper-derived modulation adapters, and the original 60-attack protocol. This release extends evaluation only. No ECC, temporal payload repetition, denoising, attack-dependent embedding, or new watermarking proposal. MM-Watermark/WAVES are not included.
+One original FC-AOIP implementation, five classical paper-derived modulation adapters, and the original 60-attack protocol. This release extends evaluation only. No ECC, temporal voting, denoising, attack-dependent embedding, or new watermarking proposal. MM-Watermark/WAVES are not included.
+
+## Original logo payloads
+
+The media benchmarks now use the two original 64x64 C/CC watermark files in `data/watermark/`. Both are evaluated for every image host and key; video alternates them by frame index and compute uses C. Alpha is composited over white and the grayscale threshold is 128. Variable-length tests spatially resample the logos; mathematical synthetic fixtures are unchanged. New compact results are stored in `results/compact12_real_watermarks`; old random-payload results must not be reused. See `docs/COMPACT12.md` for exact counts and pairing.
 
 ## Ubuntu / WSL2
 
@@ -54,7 +58,7 @@ python scripts/verify_frozen_core.py
 | video | Actual RGB FFV1 lossless control, MPEG-4, H.264/H.265 CRF 18/23/28/35, VP9, AV1, RGB lossless H.264, chroma 4:4:4, recompression; paced file and webcam queue/deadline tests, multiple streams |
 | video_frames60 | Sample actual video frames and evaluate exactly the original 60 image attacks |
 
-Full paper launcher uses 12 training hosts and one key for the large 115-configuration hyperparameter sweep, all 100 training hosts and one key for calibration, all 50 validation and 124 test hosts with five keys. The original six-method comparison has 244,800 scheduled attacked rows across legacy and test, plus the separate five calibrated baseline configurations; this includes explicit failure rows, not necessarily successful recovery. You can expand hyperparameter sweeps to all training hosts by invoking the independent runner without `--limit`.
+Full paper launcher uses 12 training hosts and one key for the large 115-configuration hyperparameter sweep, all 100 training hosts and one key for calibration, all 50 validation and 124 test hosts with five keys. The original six-method comparison has 489,600 scheduled attacked rows across legacy and test, plus the separate five calibrated baseline configurations; this includes explicit failure rows, not necessarily successful recovery. You can expand hyperparameter sweeps to all training hosts by invoking the independent runner without `--limit`.
 
 ```bash
 # Full training sweep (all 100 selected training images)

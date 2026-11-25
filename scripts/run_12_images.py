@@ -64,11 +64,11 @@ def main():
     p.add_argument('--video-profile',choices=['lite','paper'],default='paper')
     p.add_argument('--video-frames',type=int,default=100)
     p.add_argument('--attack-frames',type=int,default=10)
-    p.add_argument('--out',type=Path,default=common.ROOT/'results/compact12_proposal_only')
+    p.add_argument('--out',type=Path,default=common.ROOT/'results/compact12_real_watermarks')
     a=p.parse_args()
     if min(a.keys,a.video_frames,a.attack_frames)<1:p.error('Counts must be positive')
     if a.video_input and not a.video_input.is_file():p.error('Local video does not exist')
-    common.verify_core();a.out.mkdir(parents=True,exist_ok=True)
+    common.verify_core();common.watermark_manifest();a.out.mkdir(parents=True,exist_ok=True)
     splits=prepare_split(a.out)
     def run(group,split,keys,matched=None,matched_only=False,method_filter=None):
         images.run_images(group,split,'paper',a.out/group,a.resume,keys=keys,
@@ -82,7 +82,7 @@ def main():
             raise RuntimeError('Calibration does not match this train split or source')
         obj=dict(proposal=common.DEFAULT,strengths=chosen,details=details,
                  image_split_sha256=common.sha(a.out/'image_split.json'),
-                 calibration_manifest=common.sha(folder/'manifest.json'),core=common.verify_core(),
+                 calibration_manifest=common.sha(folder/'manifest.json'),watermarks=common.watermark_manifest(),core=common.verify_core(),
                  attack_protocol=common.protocol_sha256())
         common.atomic_json(a.out/'frozen_config.json',dict(obj,fingerprint=common.digest(obj)))
         return chosen

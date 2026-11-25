@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Real-video/file/camera experiment with actual MP4 re-encoding evaluation.
 
-Each frame uses a fresh independently generated raw payload; no temporal
-repetition, ECC, CRC, denoising, attack-adaptive decoder, or transform search.
+Frames alternate between the two bundled logo payloads; no temporal
+voting, ECC, CRC, denoising, attack-adaptive decoder, or transform search.
 Public one-bit per-frame carrier mode is recorded in sidecar CSV, so decoder
 is blind to the cover but NOT descriptor-free. 512x512 / 4096 bits for all
 five provided classical image adapters. Unqualified frames are reported and
@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np,cv2
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT),str(ROOT/'src')]
+from experiments.watermarks import watermark_bits, watermark_for_index, watermark_manifest
 from fcaoip.evaluation import METHODS,apply_embed,apply_extract,psnr,ber,nc01
 
 def seed_for(master,frame,kind):
@@ -48,7 +49,7 @@ def process(args):
     if not initial_ok:raise RuntimeError('No readable frames in video source')
     initial=cv2.cvtColor(cv2.resize(initial_frame,(width,height)),cv2.COLOR_BGR2RGB)
     warm_seed=seed_for(args.seed,0,'key')
-    warm_bits=np.random.default_rng(seed_for(args.seed,0,'payload')).integers(0,2,args.bits,dtype=np.uint8)
+    warm_bits=watermark_bits('C',args.bits)
     try:apply_embed(args.method,initial,warm_bits,seed=warm_seed,psnr=args.psnr)
     except ValueError:pass  # Infeasibility is recorded during normal frame processing.
     warmup_ms=(time.perf_counter()-warm_start)*1000
@@ -62,7 +63,7 @@ def process(args):
         bgr=cv2.resize(frame,(width,height),interpolation=cv2.INTER_AREA)
         x=cv2.cvtColor(bgr,cv2.COLOR_BGR2RGB)
         seed=seed_for(args.seed,i,'key')
-        bits=np.random.default_rng(seed_for(args.seed,i,'payload')).integers(0,2,args.bits,dtype=np.uint8)
+        bits=watermark_bits(watermark_for_index(i),args.bits)
         start=time.perf_counter()
         status='ok';error='';public=None
         try:
@@ -79,7 +80,7 @@ def process(args):
         public_keys.append(public)
         writer.write(cv2.cvtColor(y,cv2.COLOR_RGB2BGR))
         total_ms=(time.perf_counter()-total_start)*1000
-        rows.append(dict(frame=i,method=args.method,status=status,seed=seed,
+        rows.append(dict(frame=i,watermark=watermark_for_index(i),method=args.method,status=status,seed=seed,
             public_mode='' if public is None else public.get('mode',''),
             payload_bits=args.bits,clean_psnr_db=clean_psnr,clean_ber=clean_ber,
             embed_ms=embed_ms,frame_total_ms=total_ms,post_mp4_ber='',post_mp4_nc01='',
@@ -94,7 +95,7 @@ def process(args):
         if not ok:break
         if r['status']=='infeasible':continue
         rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        seed=int(r['seed']);bits=np.random.default_rng(seed_for(args.seed,r['frame'],'payload')).integers(0,2,args.bits,dtype=np.uint8)
+        seed=int(r['seed']);bits=watermark_bits(r['watermark'],args.bits)
         public=public_keys[int(r['frame'])]
         decoded=apply_extract(args.method,rgb,public)
         r['post_mp4_ber']=ber(bits,decoded)
@@ -112,7 +113,7 @@ def process(args):
         throughput_exceeds_nominal_source_fps=(len(rows)/elapsed>=fps if elapsed and len(rows) else False),
         qualification_note='File processing throughput is NOT live camera frame-drop evidence; camera:N measures an actual connected webcam.',
         actual_jpeg_h264_certificate=False,
-        raw_payload_per_frame='Independent pseudorandom bits derived deterministically from master seed and frame index.',
+        raw_payload_per_frame='Original C/CC logos alternating by frame index.',watermarks=watermark_manifest(),
         public_metadata='FC-AOIP decoder requires the 1-bit mode per accepted frame; mode available from video_frames.csv.')
     (out/'video_manifest.json').write_text(json.dumps(manifest,indent=2))
     print('Video experiment:',json.dumps(manifest,indent=2))

@@ -64,8 +64,8 @@ def test_security_and_frame_attacks_actual(tmp_path):
     r.images.run_security('test','paper',tmp_path/'security',False,keys=2,
         hosts=[ROOT/'data/host/Girl.bmp'],method_filter=r.PROPOSAL_ONLY)
     q=pd.read_csv(tmp_path/'security/raw_results.csv')
-    assert set(q.method)=={'FC-AOIP'} and len(q)==5 and set(q.status)=={'ok'}
-    assert q[q.trial=='correct'].ber.iloc[0]==0
+    assert set(q.method)=={'FC-AOIP'} and len(q)==10 and set(q.status)=={'ok'}
+    assert set(q.watermark)=={'C','CC'} and q[q.trial=='correct'].ber.eq(0).all()
     r.video.run_video_frames60('smoke',tmp_path/'frame',False,
         explicit=str(ROOT/'data/video/synthetic_motion.mp4'),frame_count=1,methods=r.PROPOSAL_ONLY)
     a=pd.read_csv(tmp_path/'frame/attacks.csv')
@@ -98,10 +98,11 @@ def test_statistics_known_fixture_and_missing_pairs(tmp_path):
     rows=[]
     for m in runner.common.METHODS:
         for p in hosts:
-            for i in range(1,61):
-                rows.append(dict(host=Path(p).stem,key_index=0,condition_id=f'A{i:03}',method=m,
-                    variant='default' if m=='FC-AOIP' else 'matched',split='test',
-                    status='ok',qualified=int(m!='SS'),ber=.1 if m=='FC-AOIP' else .2))
+            for w in ('C','CC'):
+                for i in range(1,61):
+                    rows.append(dict(host=Path(p).stem,key_index=0,watermark=w,condition_id=f'A{i:03}',method=m,
+                        variant='default' if m=='FC-AOIP' else 'matched',split='test',
+                        status='ok',qualified=int(m!='SS'),ber=.1 if m=='FC-AOIP' else .2))
     pd.DataFrame(rows).to_csv(folder/'attacks.csv',index=False)
     res=analyze(tmp_path,tmp_path/'stats')
     assert len(res)==5
@@ -118,12 +119,15 @@ def test_image_robustness_and_payload_actual(tmp_path):
     r.images.run_images('robustness60','test','paper',tmp_path/'robustness',keys=1,
         matched=r.common.FIXED_STRENGTHS,hosts=hosts,matched_only=True)
     a=pd.read_csv(tmp_path/'robustness/attacks.csv')
-    assert set(a.method)==set(r.common.METHODS) and len(a)==360
-    assert a.groupby('method').condition_id.nunique().eq(60).all()
+    assert set(a.method)==set(r.common.METHODS) and len(a)==720
+    assert a.groupby(['method','watermark']).condition_id.nunique().eq(60).all()
+    assert a.groupby(['method','watermark']).size().eq(60).all()
+    assert set(a.watermark)=={'C','CC'}
+    assert a.seed.nunique()==1
     assert set(a[a.method=='FC-AOIP'].status)=={'ok'}
     r.images.run_images('payload_robustness','test','paper',tmp_path/'payload',keys=1,
         hosts=hosts,method_filter=r.PROPOSAL_ONLY)
     b=pd.read_csv(tmp_path/'payload/attacks.csv')
-    assert set(b.method)=={'FC-AOIP'} and len(b)==360
+    assert set(b.method)=={'FC-AOIP'} and len(b)==720
     assert set(b.payload_bits)=={64,256,512,1024,2048,4096}
-    assert b.groupby('payload_bits').condition_id.nunique().eq(60).all()
+    assert b.groupby(['payload_bits','watermark']).size().eq(60).all()

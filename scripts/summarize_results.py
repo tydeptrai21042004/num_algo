@@ -24,8 +24,14 @@ def summarize(folder,out):
             rows.append(row)
             for (cat,level),z in valid.groupby(['category','level']):fams.append(dict(method=method,variant=variant,category=cat,level=level,mean_ber=float(z.ber.mean()),mean_nc01=float(z.nc01.mean()),n=len(z)))
             if method=='FC-AOIP':continue
-            base=a[(a.method=='FC-AOIP')&(a.variant=='default')&(a.status=='ok')&(a.qualified==1)];join=valid.merge(base,on=['host','key_index','condition_id'],suffixes=('_baseline','_proposal'));join['difference']=join.ber_baseline-join.ber_proposal;d=cluster_ci(join,'difference')
+            base=a[(a.method=='FC-AOIP')&(a.variant=='default')&(a.status=='ok')&(a.qualified==1)];join=valid.merge(base,on=['host','key_index','watermark','condition_id'],suffixes=('_baseline','_proposal'),validate='one_to_one') if 'watermark' in valid else valid.merge(base,on=['host','key_index','condition_id'],suffixes=('_baseline','_proposal'),validate='one_to_one');join['difference']=join.ber_baseline-join.ber_proposal;d=cluster_ci(join,'difference')
             pairs.append(dict(method=method,variant=variant,paired_attacks=len(join),paired_hosts=d[3],mean_baseline_minus_proposal_ber=d[0],ci_low=d[1],ci_high=d[2]))
+        if 'watermark' in q:
+            per_logo=[]
+            for (m,v,w),g in q.groupby(['method','variant','watermark']):
+                z=a[(a.method==m)&(a.variant==v)&(a.watermark==w)&(a.status=='ok')&(a.qualified==1)]
+                per_logo.append(dict(method=m,variant=v,watermark=w,attempts=len(g),qualified=int(g.qualified.sum()),mean_clean_psnr=float(pd.to_numeric(g.psnr_db,errors='coerce').mean()),mean_attacked_ber=float(z.ber.mean()) if len(z) else None,mean_attacked_nc01=float(z.nc01.mean()) if len(z) else None))
+            write_csv(dest/'watermark_summary.csv',per_logo)
         write_csv(dest/'method_summary.csv',rows);write_csv(dest/'family_summary.csv',fams);write_csv(dest/'paired_summary.csv',pairs)
         pd.DataFrame(rows).to_latex(dest/'method_summary.tex',index=False,float_format='%.4f',escape=True)
     for path in folder.rglob('raw_results.csv'):

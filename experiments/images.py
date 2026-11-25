@@ -59,14 +59,15 @@ def run_images(group,split,profile,out,resume=False,limit=None,keys=None,matched
         for path in hosts:
             x=load_image(path);host=path.stem
             for k in range(keys):
-                sd=seed('schedule',host,k);base_bits=bits_for(4096,'payload',host,k)
-                for method,variant,p,strength in specs:
-                    key=(host,k,method,variant)
-                    if store.has(key):continue
-                    b=base_bits[:int(variant.split('_')[1])] if group=='payload_robustness' else base_bits
-                    base=dict(experiment=group,split=split,host=host,key_index=k,seed=sd,method=method,variant=variant,payload_bits=len(b))
-                    rows=case_rows(x,b,method,p,strength,base,sd,('attacks',host,k));store.put(key,rows)
-                    print(group,host,k,method,variant,rows[0]['status'],flush=True)
+                sd=seed('schedule',host,k)
+                for watermark in WATERMARK_IDS:
+                    for method,variant,p,strength in specs:
+                        key=(host,k,watermark,method,variant)
+                        if store.has(key):continue
+                        b=watermark_bits(watermark,int(variant.split('_')[1]) if group=='payload_robustness' else 4096)
+                        base=dict(experiment=group,split=split,host=host,key_index=k,watermark=watermark,seed=sd,method=method,variant=variant,payload_bits=len(b))
+                        rows=case_rows(x,b,method,p,strength,base,sd,('attacks',host,k));store.put(key,rows)
+                        print(group,host,k,watermark,method,variant,rows[0]['status'],flush=True)
     finally:store.close()
 
 def calibration_selection(folder):
@@ -74,8 +75,9 @@ def calibration_selection(folder):
     folder=Path(folder);m=json.loads((folder/'manifest.json').read_text())
     if m['config']['split']!='train' or m['config']['group']!='calibration':raise ValueError('Only training calibration results allowed')
     q=pd.read_csv(folder/'quality.csv');a=pd.read_csv(folder/'attacks.csv');records={};chosen={}
-    cfg=m['config'];expected=len(cfg['hosts'])*cfg['keys']*len(cfg['specs'])
+    cfg=m['config'];expected=len(cfg['hosts'])*cfg['keys']*len(cfg['specs'])*len(WATERMARK_IDS)
     if len(q)!=expected or len(a)!=expected*60 or {s[0] for s in cfg['specs']}!=set(STRENGTHS):raise RuntimeError('Incomplete training calibration')
+    if cfg.get('watermarks')!=watermark_manifest():raise RuntimeError('Calibration watermark protocol mismatch')
     if m['core']!=verify_core() or m['attack_protocol_sha256']!=protocol_sha256():raise RuntimeError('Calibration core/protocol mismatch')
     for method in STRENGTHS:
         qs=q[q.method==method]; candidates=[]
@@ -91,6 +93,7 @@ def calibration_selection(folder):
 def freeze(out,calibration,validation):
     from .datasets import verify_splits
     chosen,details=calibration_selection(calibration);v=Path(validation);m=json.loads((v/'manifest.json').read_text());cfg=m['config'];
+    if cfg.get('watermarks')!=watermark_manifest():raise RuntimeError('Validation watermark protocol mismatch')
     if cfg['group']!='validation' or cfg['split']!='validation':raise RuntimeError('Held-out validation required')
     for sp,manifest in [('train',json.loads((Path(calibration)/'manifest.json').read_text())),('validation',m)]:
         allowed={r['path']:r['sha256'] for r in json.loads((ROOT/'data/manifests'/f'{sp}.json').read_text())}
@@ -99,15 +102,15 @@ def freeze(out,calibration,validation):
     if {s[0] for s in cfg['specs']}!=set(METHODS):raise RuntimeError('Incomplete validation method set')
     if not (v/'quality.csv').exists():raise RuntimeError('Validation incomplete')
     import pandas as pd
-    q=pd.read_csv(v/'quality.csv');a=pd.read_csv(v/'attacks.csv');expected=len(cfg['hosts'])*cfg['keys']*len(cfg['specs'])
+    q=pd.read_csv(v/'quality.csv');a=pd.read_csv(v/'attacks.csv');expected=len(cfg['hosts'])*cfg['keys']*len(cfg['specs'])*len(WATERMARK_IDS)
     if len(q)!=expected or len(a)!=expected*60:raise RuntimeError('Incomplete validation cases')
-    obj=dict(proposal=DEFAULT,strengths=chosen,calibration_details=details,dataset_fingerprint=verify_splits(),core=verify_core(),attack_protocol=protocol_sha256(),calibration_manifest=sha(Path(calibration)/'manifest.json'),validation_manifest=sha(v/'manifest.json'))
+    obj=dict(proposal=DEFAULT,strengths=chosen,watermarks=watermark_manifest(),calibration_details=details,dataset_fingerprint=verify_splits(),core=verify_core(),attack_protocol=protocol_sha256(),calibration_manifest=sha(Path(calibration)/'manifest.json'),validation_manifest=sha(v/'manifest.json'))
     atomic_json(out,dict(obj,fingerprint=digest(obj)));return chosen
 
 def read_frozen(path):
     from .datasets import verify_splits
     o=json.loads(Path(path).read_text());h=o.pop('fingerprint')
-    if digest(o)!=h or o['core']!=verify_core() or o['attack_protocol']!=protocol_sha256() or o['dataset_fingerprint']!=verify_splits() or o['proposal']!=DEFAULT:raise RuntimeError('Frozen config verification failed')
+    if o.get('watermarks')!=watermark_manifest() or digest(o)!=h or o['core']!=verify_core() or o['attack_protocol']!=protocol_sha256() or o['dataset_fingerprint']!=verify_splits() or o['proposal']!=DEFAULT:raise RuntimeError('Frozen config verification failed')
     return o['strengths']
 
 def run_security(split,profile,out,resume,limit=None,keys=None,hosts=None,strengths=None,method_filter=None):
@@ -116,24 +119,26 @@ def run_security(split,profile,out,resume,limit=None,keys=None,hosts=None,streng
     hosts=get_hosts(split,profile,limit) if hosts is None else list(hosts);keys=keys or (2 if profile=='smoke' else 100 if profile=='stress' else 25);store=Store(out,dict(group='security',split=split,hosts={str(p.relative_to(ROOT)):sha(p) for p in hosts},keys=keys,strengths=strengths,methods=methods),resume)
     try:
         for path in hosts:
-            x=load_image(path);host=path.stem;b=bits_for(4096,host,'security');sd=seed(host,'correct')
-            for method in methods:
-                key=(host,method)
-                if store.has(key):continue
-                rows=[];base=dict(host=host,method=method,split=split)
-                try:
-                    y,pub=embed_method(method,x,b,sd,strengths=strengths);q=quality(x,y,b,pub,method,DEFAULT)
-                    rows.append(dict(base,trial='correct',status='ok',qualified=q['qualified'],**accuracy(b,apply_extract(method,y,pub))))
-                    # Baseline DCT keys are not just seed dictionaries. Derive a new valid key from a separate embedding.
-                    for i in range(keys):
-                        wrong=seed(host,'wrong',i)
-                        try:
-                            if method=='FC-AOIP':wp={**pub,'seed':wrong}
-                            else:_,wp=embed_method(method,x,b,wrong,strengths=strengths)
-                            for kind,img,p in [('wrong_key',y,wp),('unmarked',x,pub)]:
-                                target=b if kind=='wrong_key' else bits_for(len(b),host,'unmarked',i)
-                                rows.append(dict(base,trial=kind,index=i,status='ok',qualified=q['qualified'],**accuracy(target,apply_extract(method,img,p))))
-                        except Exception as e:rows.append(dict(base,trial='wrong_key',index=i,status=error_status(e),error=str(e)))
-                except Exception as e:rows.append(dict(base,trial='correct',status=error_status(e),error=str(e)))
-                store.put(key,rows)
+            x=load_image(path);host=path.stem;sd=seed(host,'correct')
+            for watermark in WATERMARK_IDS:
+                b=watermark_bits(watermark)
+                for method in methods:
+                    key=(host,watermark,method)
+                    if store.has(key):continue
+                    rows=[];base=dict(host=host,method=method,split=split,watermark=watermark)
+                    try:
+                        y,pub=embed_method(method,x,b,sd,strengths=strengths);q=quality(x,y,b,pub,method,DEFAULT)
+                        rows.append(dict(base,trial='correct',status='ok',qualified=q['qualified'],**accuracy(b,apply_extract(method,y,pub))))
+                        # Baseline DCT keys are not just seed dictionaries. Derive a new valid key from a separate embedding.
+                        for i in range(keys):
+                            wrong=seed(host,'wrong',i)
+                            try:
+                                if method=='FC-AOIP':wp={**pub,'seed':wrong}
+                                else:_,wp=embed_method(method,x,b,wrong,strengths=strengths)
+                                for kind,img,p in [('wrong_key',y,wp),('unmarked',x,wp)]:
+                                    target=b
+                                    rows.append(dict(base,trial=kind,index=i,test_seed=wrong,status='ok',qualified=q['qualified'],**accuracy(target,apply_extract(method,img,p))))
+                            except Exception as e:rows.append(dict(base,trial='wrong_key',index=i,status=error_status(e),error=str(e)))
+                    except Exception as e:rows.append(dict(base,trial='correct',status=error_status(e),error=str(e)))
+                    store.put(key,rows)
     finally:store.close()

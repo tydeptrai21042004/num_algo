@@ -16,7 +16,7 @@ CODECS['h264_lossless_rgb']=['-c:v','libx264rgb','-preset','ultrafast','-crf','0
 CODECS['av1_32']=['-c:v','libaom-av1','-crf','32','-b:v','0','-cpu-used','8','-pix_fmt','yuv420p']
 
 def ffmpeg(*args):return ['ffmpeg','-hide_banner','-loglevel','error','-nostdin','-y','-filter_threads','1',*map(str,args)]
-def frame_bits(k,source,i):return bits_for(k,'video_payload',source,i)
+def frame_bits(k,source,i):return watermark_bits(watermark_for_index(i),k)
 def frame_seed(source,i):return seed('video_schedule',source,i)
 def serial_public(pub):
     if pub is None:return None
@@ -62,7 +62,7 @@ def mark_video(src,source,method,h,w,k,frames,output,fps=None,strengths=None):
                 start=time.perf_counter_ns();ok,frame=cap.read();read_ms=elapsed(start)
                 if not ok:break
                 t=time.perf_counter_ns();x=cv2.cvtColor(cv2.resize(frame,(w,h),interpolation=cv2.INTER_AREA),cv2.COLOR_BGR2RGB);pre=elapsed(t);b=frame_bits(k,source,i);sd=frame_seed(source,i);p=None
-                row=dict(frame=i,source=source,method=method,width=w,height=h,payload_bits=k,source_fps=native_fps,output_fps=fps,read_ms=read_ms,preprocess_ms=pre,status='ok',qualified=0,first_frame=i==0)
+                row=dict(frame=i,watermark=watermark_for_index(i),source=source,method=method,width=w,height=h,payload_bits=k,source_fps=native_fps,output_fps=fps,read_ms=read_ms,preprocess_ms=pre,status='ok',qualified=0,first_frame=i==0)
                 try:
                     if i==0:
                         t=time.perf_counter_ns()
@@ -78,7 +78,7 @@ def mark_video(src,source,method,h,w,k,frames,output,fps=None,strengths=None):
         cap.release()
         if enc is not None and enc.poll() is None:enc.kill();enc.wait()
     if not rows:raise RuntimeError('No source frames')
-    write_csv(output.parent/'frame_timing.csv',rows);atomic_json(output.parent/'public_metadata.json',dict(source=source,method=method,keys=[serial_public(p) for p in keys],payload='deterministic independent raw bits, no repetition',frame_alignment='sequential frame indices, no synchronization recovery'))
+    write_csv(output.parent/'frame_timing.csv',rows);atomic_json(output.parent/'public_metadata.json',dict(source=source,method=method,keys=[serial_public(p) for p in keys],payload='original C/CC logos alternating by frame index; no temporal vote or ECC',watermarks=watermark_manifest(),frame_alignment='sequential frame indices, no synchronization recovery'))
     atomic_json(output.parent/'source_manifest.json',dict(source=src,native_size=native_size,native_fps=native_fps,processing_size=[w,h],output_fps=fps,requested_frames=frames,actual_frames=len(rows),source_exhausted=len(rows)<frames,wall_s=elapsed(wall)/1000,output_sha256=sha(output),lossless_control='FFV1 RGB via bgr0'))
     return rows,keys,mark_hashes,fps
 
@@ -87,7 +87,7 @@ def decode_video(path,source,method,h,w,k,rows,keys,hashes,codec,generation,refe
     refproc=subprocess.Popen(ffmpeg('-threads','1','-i',reference,'-map','0:v:0','-f','rawvideo','-pix_fmt','rgb24','-threads','1','pipe:1'),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL) if reference is not None and codec!='ffv1' else None
     try:
         for i,row in enumerate(rows):
-            t=time.perf_counter_ns();raw=read_exact(proc.stdout,h*w*3);ms=elapsed(t);r=dict(table='video_codec_frames',source=source,method=method,codec=codec,generation=generation,frame=i,qualified=row['qualified'],status='missing_frame')
+            t=time.perf_counter_ns();raw=read_exact(proc.stdout,h*w*3);ms=elapsed(t);r=dict(table='video_codec_frames',source=source,method=method,codec=codec,generation=generation,frame=i,watermark=watermark_for_index(i),qualified=row['qualified'],status='missing_frame')
             refraw=read_exact(refproc.stdout,h*w*3) if refproc else None
             if raw is not None:
                 rgb=np.frombuffer(raw,np.uint8).reshape(h,w,3);r.update(decode_read_ms=ms,lossless_pixel_match=int(pixel_hash(rgb)==hashes[i]),status='not_embedded')
@@ -163,21 +163,21 @@ def paced_stream(src,source,method,h,w,k,fps,frames,seconds=None,loop=False,queu
                     cap.set(cv2.CAP_PROP_POS_FRAMES,0);ok,frame=cap.read();captured=time.monotonic()
                 if not ok:break
                 try:q.put_nowait((i,scheduled,captured,frame,(captured-start)*1000))
-                except queue.Full:dropped.append(dict(frame=i,status='queue_drop',scheduled_s=scheduled-origin,captured_s=captured-origin))
+                except queue.Full:dropped.append(dict(frame=i,watermark=watermark_for_index(i),status='queue_drop',scheduled_s=scheduled-origin,captured_s=captured-origin))
                 i+=1
         except Exception as e:errors.append(str(e))
         finally:
             cap.release();q.put(None)
     # Warm kernels outside measured streaming window; no warmup frames silently discarded.
     try:
-        x=np.full((h,w,3),128,np.uint8);b=bits_for(k,'warm');embed_method(method,x,b,1,strengths=strengths)
+        x=np.full((h,w,3),128,np.uint8);b=watermark_bits('C',k);embed_method(method,x,b,1,strengths=strengths)
     except Exception:pass
     origin=time.monotonic();thread=threading.Thread(target=produce,daemon=True);thread.start()
     try:
         while True:
             item=q.get()
             if item is None:break
-            i,scheduled,captured,frame,read_ms=item;t=time.perf_counter_ns();queue_ms=(time.monotonic()-captured)*1000;x=cv2.cvtColor(cv2.resize(frame,(w,h),interpolation=cv2.INTER_AREA),cv2.COLOR_BGR2RGB);prep=elapsed(t);b=frame_bits(k,source,i);sd=frame_seed(source,i);r=dict(frame=i,status='ok',qualified=0,read_ms=read_ms,preprocess_ms=prep,queue_ms=queue_ms,queue_depth=q.qsize())
+            i,scheduled,captured,frame,read_ms=item;t=time.perf_counter_ns();queue_ms=(time.monotonic()-captured)*1000;x=cv2.cvtColor(cv2.resize(frame,(w,h),interpolation=cv2.INTER_AREA),cv2.COLOR_BGR2RGB);prep=elapsed(t);b=frame_bits(k,source,i);sd=frame_seed(source,i);r=dict(frame=i,watermark=watermark_for_index(i),status='ok',qualified=0,read_ms=read_ms,preprocess_ms=prep,queue_ms=queue_ms,queue_depth=q.qsize())
             try:
                 t=time.perf_counter_ns();y,p=embed_method(method,x,b,sd,strengths=strengths);r['embed_ms']=elapsed(t);t=time.perf_counter_ns();pred=apply_extract(method,y,p);r['extract_ms']=elapsed(t);r.update(clean_ber=ber(b,pred),psnr_db=psnr(x,y));r['qualified']=int(r['clean_ber']==0 and r['psnr_db']>=55-1e-8);r['status']='ok' if r['qualified'] else 'unqualified'
             except Exception as e:r.update(status=error_status(e),error=str(e))
@@ -247,7 +247,7 @@ def run_video_frames60(profile,out,resume,split='test',explicit=None,frame_count
                     for method in methods:
                         key=(source,int(index),method)
                         if store.has(key):continue
-                        base=dict(experiment='video_frames60',split=split,source=source,frame=int(index),host=host,key_index=0,seed=sd,method=method,variant='default',payload_bits=len(b))
+                        base=dict(experiment='video_frames60',split=split,source=source,frame=int(index),host=host,key_index=0,watermark=watermark_for_index(index),seed=sd,method=method,variant='default',payload_bits=len(b))
                         store.put(key,case_rows(x,b,method,DEFAULT,strengths,base,sd,('video_attacks',source,int(index))))
             finally:cap.release()
     finally:store.close()

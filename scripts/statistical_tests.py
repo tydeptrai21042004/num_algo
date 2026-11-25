@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from experiments.common import METHODS, atomic_json, write_csv
+from experiments.common import METHODS, atomic_json, write_csv, WATERMARK_IDS
 import numpy as np
 import pandas as pd
 from scipy.stats import binomtest
@@ -29,7 +29,7 @@ def analyze(root, out):
     if not path.exists():
         raise FileNotFoundError(f'Run the held-out test stage first: {path}')
     df = pd.read_csv(path)
-    ids = ['host','key_index','condition_id']
+    ids = ['host','key_index','watermark','condition_id']
     required = set(ids+['method','variant','status','qualified','split'])
     if not required <= set(df):
         raise ValueError(f'Missing columns: {required-set(df)}')
@@ -41,8 +41,8 @@ def analyze(root, out):
     import json
     cfg = json.loads((path.parent/'manifest.json').read_text())['config']
     hosts = {Path(p).stem for p in cfg['hosts']}
-    expected = len(hosts)*cfg['keys']*60
-    expected_ids = {(h,k,f'A{i:03d}') for h in hosts for k in range(cfg['keys']) for i in range(1,61)}
+    expected = len(hosts)*cfg['keys']*len(WATERMARK_IDS)*60
+    expected_ids = {(h,k,w,f'A{i:03d}') for h in hosts for k in range(cfg['keys']) for w in WATERMARK_IDS for i in range(1,61)}
     if len(hosts)!=8 or any(set(map(tuple, df.loc[df.method==m,ids].itertuples(index=False,name=None)))!=expected_ids for m in METHODS):
         raise ValueError('Incomplete or unexpected held-out attack schedule')
     if 'ber' not in df: df['ber'] = np.nan
@@ -71,10 +71,10 @@ def analyze(root, out):
     write_csv(out/'paired_host_differences.csv',details)
     pd.DataFrame(rows).to_latex(out/'paired_sign_tests.tex',index=False,float_format='%.4f',escape=True)
     atomic_json(out/'methodology.json',dict(unit='host',test='two-sided exact paired sign test; Holm across five baselines',
-        estimand='baseline minus proposal BER, averaged over jointly qualified matching keys and attacks within each host',
+        estimand='baseline minus proposal BER, averaged over jointly qualified matching keys, watermarks and attacks within each host',
         caveats=['Conditional on jointly qualified cases; not an unconditional robustness comparison.', 'Missing or failed cases are not imputed; coverage is reported.', 'Eight previously used hosts; inference is exploratory and assumes independent hosts.', 'Positive difference favors FC-AOIP.']))
     print('Statistical tests:',out)
     return rows
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=Path('results/compact12_proposal_only'));p.add_argument('--out',type=Path,default=Path('results/compact12_proposal_only_summary/statistics'));a=p.parse_args();analyze(a.root,a.out)
+    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=Path('results/compact12_real_watermarks'));p.add_argument('--out',type=Path,default=Path('results/compact12_real_watermarks_summary/statistics'));a=p.parse_args();analyze(a.root,a.out)

@@ -55,7 +55,7 @@ def make_input(h,w,kind):
     return synthetic(kind,h,w)
 
 def worker_batch(task):
-    path,n,sd=task;x=load_image(path);b=bits_for(4096,sd);count=0;errors=0;t=time.perf_counter_ns()
+    path,n,sd=task;x=load_image(path);b=watermark_bits('C');count=0;errors=0;t=time.perf_counter_ns()
     for _ in range(n):
         try:
             y,p=embed_method('FC-AOIP',x,b,sd);count+=int(np.array_equal(b,apply_extract('FC-AOIP',y,p)))
@@ -63,7 +63,7 @@ def worker_batch(task):
     return dict(success=count,errors=errors,worker_ms=elapsed(t),worker_peak_rss_mb=peak_rss_mb())
 
 def endurance(store,profile,operations=None,seconds=None):
-    x=load_image(ROOT/'data/host/Girl.bmp');b=bits_for(4096,'endurance');y,pub=embed_method('FC-AOIP',x,b,42)
+    x=load_image(ROOT/'data/host/Girl.bmp');b=watermark_bits('C');y,pub=embed_method('FC-AOIP',x,b,42)
     sizes=[10] if profile=='smoke' else [1000] if profile=='lite' else [1000,10000] if profile=='paper' else [1000,10000,100000]
     if operations:sizes=[operations]
     for count in sizes:
@@ -80,7 +80,7 @@ def endurance(store,profile,operations=None,seconds=None):
                 except Exception:errors+=1
                 i+=1
                 if i%100==0 or (i>=count and (not seconds or time.monotonic()-t0>=seconds)):
-                    now=time.monotonic();rows.append(dict(experiment='C05',operation=op,requested=count,requested_seconds=seconds,operations=i,success=ok,errors=errors,status='ok' if errors==0 and ok==i else 'error',wall_s=now-t0,window_wall_s=now-last,window_count=len(window),median_ms=float(np.median(window)) if window else None,p95_ms=float(np.percentile(window,95)) if window else None,p99_ms=float(np.percentile(window,99)) if window else None,rss_mb=proc.memory_info().rss/2**20,start_rss_mb=start_rss,cpu_percent=proc.cpu_percent(),peak_rss_mb=peak_rss_mb()));window=[];last=now
+                    now=time.monotonic();rows.append(dict(watermark='C',experiment='C05',operation=op,requested=count,requested_seconds=seconds,operations=i,success=ok,errors=errors,status='ok' if errors==0 and ok==i else 'error',wall_s=now-t0,window_wall_s=now-last,window_count=len(window),median_ms=float(np.median(window)) if window else None,p95_ms=float(np.percentile(window,95)) if window else None,p99_ms=float(np.percentile(window,99)) if window else None,rss_mb=proc.memory_info().rss/2**20,start_rss_mb=start_rss,cpu_percent=proc.cpu_percent(),peak_rss_mb=peak_rss_mb()));window=[];last=now
             store.put(key,rows)
 
 def parallel(store,profile):
@@ -93,8 +93,8 @@ def parallel(store,profile):
         try:
             # Spawn prevents forking a process with initialized OpenMP/Numba state.
             with ProcessPoolExecutor(max_workers=workers,mp_context=mp.get_context('spawn')) as pool:r=list(pool.map(worker_batch,[(str(ROOT/'data/host/Girl.bmp'),n,seed('worker',i)) for i in range(workers)]))
-            wall=elapsed(t)/1000;success=sum(x['success'] for x in r);row=dict(experiment='C06',workers=workers,operations=workers*n,success=success,errors=sum(x['errors'] for x in r),status='ok' if success==workers*n else 'error',wall_s=wall,successful_images_s=success/wall,includes_worker_startup=True,max_worker_peak_rss_mb=max(x['worker_peak_rss_mb'] for x in r))
-        except Exception as e:row=dict(experiment='C06',workers=workers,status='error',error=str(e))
+            wall=elapsed(t)/1000;success=sum(x['success'] for x in r);row=dict(watermark='C',experiment='C06',workers=workers,operations=workers*n,success=success,errors=sum(x['errors'] for x in r),status='ok' if success==workers*n else 'error',wall_s=wall,successful_images_s=success/wall,includes_worker_startup=True,max_worker_peak_rss_mb=max(x['worker_peak_rss_mb'] for x in r))
+        except Exception as e:row=dict(watermark='C',experiment='C06',workers=workers,status='error',error=str(e))
         store.put(key,[row])
 
 def run_compute(profile,out,resume,operations=None,seconds=None):
@@ -106,12 +106,12 @@ def run_compute(profile,out,resume,operations=None,seconds=None):
                 key=(round_idx,experiment,h,w,k,kind,p,method,kernel)
                 if store.has(key):continue
                 if experiment!='C03' and experiment!='C03_kernel' and round_idx:continue
-                base=dict(experiment=experiment,height=h,width=w,pixels=h*w,payload_bits=k,kind=kind,method=method,round=round_idx,kernel_only=kernel,psnr_floor=p['psnr'],max_margin=p['max_margin'])
+                base=dict(watermark='C',experiment=experiment,height=h,width=w,pixels=h*w,payload_bits=k,kind=kind,method=method,round=round_idx,kernel_only=kernel,psnr_floor=p['psnr'],max_margin=p['max_margin'])
                 # Full frozen API materializes several arrays. Skip if conservative estimate exceeds available RAM.
                 if h*w*64>available_memory()*.65:rows=[dict(status='skipped_memory_guard',error='Conservative memory estimate exceeds 65% of available RAM')]
                 else:
                     try:
-                        x=make_input(h,w,kind);b=bits_for(k,'compute',h,w,k);reps=settings['reps'] if experiment in ('C03','C03_kernel') else min(settings['reps'],3 if h*w>4_000_000 else 10);rows=timing_case(x,b,method,p,42,reps,settings['warm'] if experiment.startswith('C03') else 1,round_idx,kernel);del x,b
+                        x=make_input(h,w,kind);b=watermark_bits('C',k);reps=settings['reps'] if experiment in ('C03','C03_kernel') else min(settings['reps'],3 if h*w>4_000_000 else 10);rows=timing_case(x,b,method,p,42,reps,settings['warm'] if experiment.startswith('C03') else 1,round_idx,kernel);del x,b
                     except Exception as e:rows=[dict(status=error_status(e),error=str(e))]
                 store.put(key,[dict(base,**r) for r in rows]);print(experiment,h,w,k,method,rows[0]['status'],flush=True)
         endurance(store,profile,operations,seconds);parallel(store,profile)
