@@ -51,7 +51,7 @@ def video_input(profile,split='test',explicit=None):
     if not out:raise RuntimeError(f'No source videos for split {split}')
     return out
 
-def mark_video(src,source,method,h,w,k,frames,output,fps=None):
+def mark_video(src,source,method,h,w,k,frames,output,fps=None,strengths=None):
     """Encode marked RGB into lossless FFV1. No repeated payload, no frame padding."""
     cap=capture(src);native_fps=cap.get(cv2.CAP_PROP_FPS);native_size=[int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))];fps=float(fps or (native_fps if native_fps>0 else 30));rows=[];keys=[];mark_hashes=[];output.parent.mkdir(parents=True,exist_ok=True)
     log=output.with_suffix('.ffmpeg.log');wall=time.perf_counter_ns();enc=None
@@ -66,10 +66,10 @@ def mark_video(src,source,method,h,w,k,frames,output,fps=None):
                 try:
                     if i==0:
                         t=time.perf_counter_ns()
-                        try:embed_method(method,x,b,sd)
+                        try:embed_method(method,x,b,sd,strengths=strengths)
                         except ValueError:pass
                         row['warmup_ms']=elapsed(t)
-                    t=time.perf_counter_ns();y,p=embed_method(method,x,b,sd);row['embed_ms']=elapsed(t);row.update(quality(x,y,b,p,method,DEFAULT));row['status']='ok' if row['qualified'] else 'unqualified'
+                    t=time.perf_counter_ns();y,p=embed_method(method,x,b,sd,strengths=strengths);row['embed_ms']=elapsed(t);row.update(quality(x,y,b,p,method,DEFAULT));row['status']='ok' if row['qualified'] else 'unqualified'
                 except Exception as e:y=x;p=None;row.update(status=error_status(e),error=str(e))
                 mark_hashes.append(pixel_hash(y));keys.append(p);t=time.perf_counter_ns();enc.stdin.write(y.tobytes());row['pipe_write_ms']=elapsed(t);row['capture_to_write_ms']=elapsed(start);row['deadline_ms']=1000/fps;row['algorithm_deadline_miss']=int(row.get('embed_ms',0)+row.get('extract_ms',0)>1000/fps) if 'embed_ms' in row else None;rows.append(row)
             enc.stdin.close();rc=enc.wait();
@@ -117,13 +117,13 @@ def encode_codec(source,target,codec):
     if r.returncode:raise RuntimeError(r.stderr.decode()[-800:])
     return elapsed(t)/1000
 
-def codec_case(store,src,source,method,h,w,k,frames,profile,codecs,keep=False):
+def codec_case(store,src,source,method,h,w,k,frames,profile,codecs,keep=False,strengths=None):
     key=('E03',source,method,h,w,k,frames,codecs)
     if store.has(key):return
     job=store.out/'artifacts'/digest(key)[:16];job.mkdir(parents=True,exist_ok=True);base=dict(source=source,method=method,width=w,height=h,payload_bits=k)
     collected=[];lossless=job/'marked_ffv1.mkv'
     try:
-        rows,keys,hashes,fps=mark_video(src,source,method,h,w,k,frames,lossless)
+        rows,keys,hashes,fps=mark_video(src,source,method,h,w,k,frames,lossless,strengths=strengths)
         collected.extend(dict(table='video_frame_timing',**r) for r in rows)
         for codec in codecs:
             prev=lossless;generations=3 if profile in ('paper','stress') and codec in ('h264_23','h265_23') else 1
@@ -145,7 +145,7 @@ def codec_case(store,src,source,method,h,w,k,frames,profile,codecs,keep=False):
             for p in job.glob('*.mkv'):p.unlink(missing_ok=True)
     store.put(key,collected)
 
-def paced_stream(src,source,method,h,w,k,fps,frames,seconds=None,loop=False,queue_size=4,streams=1):
+def paced_stream(src,source,method,h,w,k,fps,frames,seconds=None,loop=False,queue_size=4,streams=1,strengths=None):
     """Real producer/consumer deadline stress. Camera hardware losses cannot be inferred."""
     cap=capture(src);camera=src.startswith('camera:');
     if camera:cap.set(cv2.CAP_PROP_FPS,fps)
@@ -170,7 +170,7 @@ def paced_stream(src,source,method,h,w,k,fps,frames,seconds=None,loop=False,queu
             cap.release();q.put(None)
     # Warm kernels outside measured streaming window; no warmup frames silently discarded.
     try:
-        x=np.full((h,w,3),128,np.uint8);b=bits_for(k,'warm');embed_method(method,x,b,1)
+        x=np.full((h,w,3),128,np.uint8);b=bits_for(k,'warm');embed_method(method,x,b,1,strengths=strengths)
     except Exception:pass
     origin=time.monotonic();thread=threading.Thread(target=produce,daemon=True);thread.start()
     try:
@@ -179,22 +179,22 @@ def paced_stream(src,source,method,h,w,k,fps,frames,seconds=None,loop=False,queu
             if item is None:break
             i,scheduled,captured,frame,read_ms=item;t=time.perf_counter_ns();queue_ms=(time.monotonic()-captured)*1000;x=cv2.cvtColor(cv2.resize(frame,(w,h),interpolation=cv2.INTER_AREA),cv2.COLOR_BGR2RGB);prep=elapsed(t);b=frame_bits(k,source,i);sd=frame_seed(source,i);r=dict(frame=i,status='ok',qualified=0,read_ms=read_ms,preprocess_ms=prep,queue_ms=queue_ms,queue_depth=q.qsize())
             try:
-                t=time.perf_counter_ns();y,p=embed_method(method,x,b,sd);r['embed_ms']=elapsed(t);t=time.perf_counter_ns();pred=apply_extract(method,y,p);r['extract_ms']=elapsed(t);r.update(clean_ber=ber(b,pred),psnr_db=psnr(x,y));r['qualified']=int(r['clean_ber']==0 and r['psnr_db']>=55-1e-8);r['status']='ok' if r['qualified'] else 'unqualified'
+                t=time.perf_counter_ns();y,p=embed_method(method,x,b,sd,strengths=strengths);r['embed_ms']=elapsed(t);t=time.perf_counter_ns();pred=apply_extract(method,y,p);r['extract_ms']=elapsed(t);r.update(clean_ber=ber(b,pred),psnr_db=psnr(x,y));r['qualified']=int(r['clean_ber']==0 and r['psnr_db']>=55-1e-8);r['status']='ok' if r['qualified'] else 'unqualified'
             except Exception as e:r.update(status=error_status(e),error=str(e))
             end=time.monotonic();r.update(capture_to_extract_ms=(end-captured)*1000,scheduled_to_extract_ms=(end-scheduled)*1000,deadline_miss=int(end>(captured if camera else scheduled)+period),rss_mb=proc.memory_info().rss/2**20,cpu_percent=proc.cpu_percent());rows.append(r)
     finally:stop.set();thread.join(timeout=5)
     wall=time.monotonic()-origin;valid=sum(r['qualified'] for r in rows);attempts=len(rows)+len(dropped);lat=[r['capture_to_extract_ms'] for r in rows];summary=dict(table='stream_summary',source=source,method=method,width=w,height=h,payload_bits=k,target_fps=fps,mode='camera' if camera else 'paced_file',looped_input=loop,requested_frames=frames,requested_seconds=seconds,processed=len(rows),qualified=valid,queue_drops=len(dropped),attempts=attempts,queue_drop_rate=len(dropped)/max(attempts,1),deadline_miss_rate=(sum(r['deadline_miss'] for r in rows)+len(dropped))/max(attempts,1),wall_s=wall,processed_fps=len(rows)/max(wall,1e-9),successful_fps=valid/max(wall,1e-9),median_ms=float(np.median(lat)) if lat else None,p95_ms=float(np.percentile(lat,95)) if lat else None,p99_ms=float(np.percentile(lat,99)) if lat else None,status='ok' if attempts and not errors else 'error',error='; '.join(errors),camera_hardware_drops='unknown',reported_capture_fps=reported_fps,codec_included=False)
     return [dict(table='stream_frames',source=source,method=method,target_fps=fps,**r) for r in rows+dropped]+[summary]
 
-def run_video(profile,out,resume,split='test',explicit=None,frames=None,keep=False,mode='all',seconds=None,loop=False,method_filter=None,fps_list=None):
+def run_video(profile,out,resume,split='test',explicit=None,frames=None,keep=False,mode='all',seconds=None,loop=False,method_filter=None,fps_list=None,strengths=None):
     sources=video_input(profile,split,explicit);n=frames or PROFILES[profile]['frames'];methods=method_filter or METHODS
     if any(s.startswith('camera:') for s,_ in sources) and mode!='stream':raise ValueError('Camera requires --video-mode stream')
-    store=Store(out,dict(group='video',profile=profile,split=split,sources=[(s,source,sha(s) if Path(s).is_file() else None) for s,source in sources],frames=n,seconds=seconds,mode=mode,loop=loop,keep=keep,methods=methods,fps_list=fps_list),resume)
+    store=Store(out,dict(group='video',profile=profile,split=split,sources=[(s,source,sha(s) if Path(s).is_file() else None) for s,source in sources],frames=n,seconds=seconds,mode=mode,loop=loop,keep=keep,methods=methods,fps_list=fps_list,strengths=strengths),resume)
     try:
         if mode in ('all','codec'):
             codecs=['ffv1','h264_23'] if profile=='smoke' else ['ffv1','mpeg4','h264_23','h265_23','vp9_32'] if profile=='lite' else list(CODECS)
             for src,source in sources:
-                for method in methods:codec_case(store,src,source,method,512,512,4096,n,profile,codecs,keep)
+                for method in methods:codec_case(store,src,source,method,512,512,4096,n,profile,codecs,keep,strengths=strengths)
                 if 'FC-AOIP' in methods and profile!='smoke':
                     sizes=[(480,856),(720,1280),(1080,1920)] if profile=='lite' else [(480,856),(720,1280),(1080,1920),(1440,2560),(2160,3840)]
                     if profile=='stress':sizes.append((4320,7680))
@@ -203,15 +203,15 @@ def run_video(profile,out,resume,split='test',explicit=None,frames=None,keep=Fal
                         if nh%8==0 and nw%8==0 and nh*nw//64>=4096:sizes=list(dict.fromkeys(sizes+[(nh,nw)]))
                     for h,w in sizes:
                         for k in sorted({4096,h*w//64}):
-                            if h*w*64>available_memory()*.65:store.put(('memory',source,h,w,k),[dict(table='video_codec_summary',source=source,width=w,height=h,payload_bits=k,status='skipped_memory_guard')]);continue
-                            codec_case(store,src,source,'FC-AOIP',h,w,k,min(n,300),profile,['ffv1','h264_23'],keep)
+                            if h*w*64>available_memory()*.65:store.put(('memory',source,h,w,k),[dict(table='video_codec_summary',source=source,method='FC-AOIP',width=w,height=h,payload_bits=k,status='skipped_memory_guard')]);continue
+                            codec_case(store,src,source,'FC-AOIP',h,w,k,min(n,300),profile,['ffv1','h264_23'],keep,strengths=strengths)
         if mode in ('all','stream'):
             for src,source in sources:
                 for m in methods:
                     for fps in (fps_list or ([30] if profile=='smoke' else [24,30,60] if profile=='lite' else [24,30,60,120,240])):
                         key=('E04',source,m,fps,n,seconds,loop)
                         if store.has(key):continue
-                        try:r=paced_stream(src,source,m,512,512,4096,fps,n,seconds,loop);store.put(key,r)
+                        try:r=paced_stream(src,source,m,512,512,4096,fps,n,seconds,loop,strengths=strengths);store.put(key,r)
                         except Exception as e:store.put(key,[dict(table='stream_summary',source=source,method=m,target_fps=fps,status='error',error=str(e))])
                 if profile=='stress' and 'FC-AOIP' in methods and not src.startswith('camera:'):
                     for h,w in [(720,1280),(1080,1920),(2160,3840)]:
@@ -231,10 +231,10 @@ def run_video(profile,out,resume,split='test',explicit=None,frames=None,keep=Fal
     finally:store.close()
 
 
-def run_video_frames60(profile,out,resume,split='test',explicit=None,frame_count=None,methods=None):
+def run_video_frames60(profile,out,resume,split='test',explicit=None,frame_count=None,methods=None,strengths=None):
     from .images import case_rows
     sources=video_input(profile,split,explicit);methods=methods or METHODS;n=frame_count or (1 if profile=='smoke' else 3 if profile=='lite' else 10)
-    store=Store(out,dict(group='video_frames60',split=split,profile=profile,sources=[(src,source,sha(src)) for src,source in sources],frames=n,methods=methods),resume)
+    store=Store(out,dict(group='video_frames60',split=split,profile=profile,sources=[(src,source,sha(src)) for src,source in sources],frames=n,methods=methods,strengths=strengths),resume)
     try:
         for src,source in sources:
             cap=capture(src);total=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));indices=sorted(set(np.linspace(0,max(total-1,0),n,dtype=int))) if total>0 else list(range(n))
@@ -248,6 +248,6 @@ def run_video_frames60(profile,out,resume,split='test',explicit=None,frame_count
                         key=(source,int(index),method)
                         if store.has(key):continue
                         base=dict(experiment='video_frames60',split=split,source=source,frame=int(index),host=host,key_index=0,seed=sd,method=method,variant='default',payload_bits=len(b))
-                        store.put(key,case_rows(x,b,method,DEFAULT,None,base,sd,('video_attacks',source,int(index))))
+                        store.put(key,case_rows(x,b,method,DEFAULT,strengths,base,sd,('video_attacks',source,int(index))))
             finally:cap.release()
     finally:store.close()

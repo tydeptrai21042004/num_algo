@@ -47,8 +47,11 @@ def case_rows(x,b,method,params,strengths,base,sd,attack_seed_base):
         rows.append(a)
     return rows
 
-def run_images(group,split,profile,out,resume=False,limit=None,keys=None,matched=None,method_filter=None):
-    hosts=get_hosts(split,profile,limit);specs=specs_for(group,profile,matched)
+def run_images(group,split,profile,out,resume=False,limit=None,keys=None,matched=None,method_filter=None,hosts=None,matched_only=False):
+    hosts=get_hosts(split,profile,limit) if hosts is None else list(hosts);specs=specs_for(group,profile,matched)
+    if matched_only:
+        if group!='robustness60' or not matched:raise ValueError('Matched-only requires calibrated robustness60')
+        specs=[s for s in specs if s[0]=='FC-AOIP' or s[1]=='matched']
     if method_filter:specs=[s for s in specs if s[0] in method_filter]
     if not specs:raise ValueError('No methods selected')
     keys=keys or PROFILES[profile]['keys'];store=Store(out,dict(group=group,split=split,profile=profile,keys=keys,hosts={str(p.relative_to(ROOT)):sha(p) for p in hosts},specs=specs),resume)
@@ -107,24 +110,26 @@ def read_frozen(path):
     if digest(o)!=h or o['core']!=verify_core() or o['attack_protocol']!=protocol_sha256() or o['dataset_fingerprint']!=verify_splits() or o['proposal']!=DEFAULT:raise RuntimeError('Frozen config verification failed')
     return o['strengths']
 
-def run_security(split,profile,out,resume,limit=None,keys=None):
-    hosts=get_hosts(split,profile,limit);keys=keys or (2 if profile=='smoke' else 100 if profile=='stress' else 25);store=Store(out,dict(group='security',split=split,hosts={str(p.relative_to(ROOT)):sha(p) for p in hosts},keys=keys),resume)
+def run_security(split,profile,out,resume,limit=None,keys=None,hosts=None,strengths=None,method_filter=None):
+    methods=tuple(METHODS if method_filter is None else method_filter)
+    if not methods or not set(methods)<=set(METHODS):raise ValueError("Invalid security methods")
+    hosts=get_hosts(split,profile,limit) if hosts is None else list(hosts);keys=keys or (2 if profile=='smoke' else 100 if profile=='stress' else 25);store=Store(out,dict(group='security',split=split,hosts={str(p.relative_to(ROOT)):sha(p) for p in hosts},keys=keys,strengths=strengths,methods=methods),resume)
     try:
         for path in hosts:
             x=load_image(path);host=path.stem;b=bits_for(4096,host,'security');sd=seed(host,'correct')
-            for method in METHODS:
+            for method in methods:
                 key=(host,method)
                 if store.has(key):continue
                 rows=[];base=dict(host=host,method=method,split=split)
                 try:
-                    y,pub=embed_method(method,x,b,sd);q=quality(x,y,b,pub,method,DEFAULT)
+                    y,pub=embed_method(method,x,b,sd,strengths=strengths);q=quality(x,y,b,pub,method,DEFAULT)
                     rows.append(dict(base,trial='correct',status='ok',qualified=q['qualified'],**accuracy(b,apply_extract(method,y,pub))))
                     # Baseline DCT keys are not just seed dictionaries. Derive a new valid key from a separate embedding.
                     for i in range(keys):
                         wrong=seed(host,'wrong',i)
                         try:
                             if method=='FC-AOIP':wp={**pub,'seed':wrong}
-                            else:_,wp=embed_method(method,x,b,wrong)
+                            else:_,wp=embed_method(method,x,b,wrong,strengths=strengths)
                             for kind,img,p in [('wrong_key',y,wp),('unmarked',x,pub)]:
                                 target=b if kind=='wrong_key' else bits_for(len(b),host,'unmarked',i)
                                 rows.append(dict(base,trial=kind,index=i,status='ok',qualified=q['qualified'],**accuracy(target,apply_extract(method,img,p))))

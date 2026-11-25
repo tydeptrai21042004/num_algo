@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-profile=paper; resume=(); download=1
+profile=compact12; resume=(); download=1
 while (($#)); do case "$1" in --profile) profile="$2";shift 2;; --resume) resume=(--resume);shift;; --skip-download) download=0;shift;; *) echo "Unknown argument $1" >&2;exit 2;; esac;done
-[[ "$profile" =~ ^(smoke|lite|paper|stress)$ ]] || exit 2
+if [[ "$profile" == compact12 || "$profile" == paper ]]; then
+    args=("${resume[@]}"); if (( ! download )); then args+=(--skip-download); fi
+    exec bash run_12_images.sh "${args[@]}"
+fi
+[[ "$profile" =~ ^(smoke|lite|full-paper|stress)$ ]] || exit 2
+if [[ "$profile" == full-paper ]]; then profile=paper; fi
 if [[ -f .venv/bin/activate ]]; then . .venv/bin/activate;fi
 base="results/$profile"; mkdir -p "$base"
 python scripts/verify_frozen_core.py

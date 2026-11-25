@@ -1,0 +1,26 @@
+FC-AOIP compact12 proposal-only — static and local verification
+
+Source: num_algo-main (1).zip (user-provided), with prior train/test patch applied and extended.
+PASS: Python compileall (experiments, scripts, tests).
+PASS: Bash syntax check (run_all.sh and run_12_images.sh).
+PASS: frozen proposal, baseline and attack code hashes; protected files unchanged byte-for-byte.
+PASS: deterministic 4/8 split from exactly 12 bundled BMPs, no validation and no image downloads in compact routing.
+PASS: 30 pytest tests (local run: 18.67 s).
+PASS: actual image robustness smoke run, one bundled image, six methods, one key, 360 attack rows; fixed baseline strengths for smoke testing only, not final calibration results.
+PASS: actual proposal-only payload smoke run, one bundled image, six payloads, 360 attack rows.
+PASS: actual proposal-only security smoke run, one bundled image, two wrong-key trials; five rows.
+PASS: actual proposal-only video codec and streaming smoke run, bundled synthetic video, two frames; FFV1 and H.264.
+PASS: actual proposal-only video-frame robustness smoke run, one sampled synthetic video frame; all 60 attack conditions returned status ok.
+PASS: statistical test fixture verifies exact paired host sign test, Holm correction and missing comparison handling; no real p-values asserted.
+
+Limitations: Not a full paper benchmark. No live downloads of the four real videos, full 4K run, full calibration, or end-to-end Kaggle execution. A successful attack execution does not imply BER=0 or that a baseline qualified. Statistical inference is conditional on matched jointly qualified rows; report qualification and coverage. Prior checkpoints are incompatible with changed runner hashes.
+
+Changed/new files relative to the uploaded source:
+docs/COMPACT12.md
+experiments/images.py
+experiments/video.py
+run_12_images.sh
+run_all.sh
+scripts/run_12_images.py
+scripts/statistical_tests.py
+tests/test_compact12.py
